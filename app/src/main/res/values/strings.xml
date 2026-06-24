@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ממיר מדיה</string>
+
+    <!-- Home Screen -->
+    <string name="paste_url_hint">הדבק קישור מיוטיוב או פייסבוק</string>
+    <string name="paste_button">הדבק</string>
+    <string name="download_button">הורד</string>
+    <string name="downloading">מוריד…</string>
+    <string name="choose_format">בחר פורמט</string>
+    <string name="video_mp4">וידאו (MP4)</string>
+    <string name="audio_mp3">שמע (MP3)</string>
+    <string name="quality">איכות</string>
+    <string name="fetching_info">מביא פרטים…</string>
+    <string name="ready_to_download">מוכן להורדה</string>
+
+    <!-- Quality Options -->
+    <string name="quality_360p">360p — חיסכון בנפח</string>
+    <string name="quality_480p">480p — רגיל</string>
+    <string name="quality_720p">720p — HD</string>
+    <string name="quality_1080p">1080p — Full HD</string>
+    <string name="quality_best">הכי טוב</string>
+    <string name="quality_128k">128 kbps — רגיל</string>
+    <string name="quality_192k">192 kbps — טוב</string>
+    <string name="quality_320k">320 kbps — הכי טוב</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">דף הבית</string>
+    <string name="nav_downloads">הורדות</string>
+    <string name="nav_settings">הגדרות</string>
+
+    <!-- Downloads Screen -->
+    <string name="no_downloads">עדיין אין הורדות</string>
+    <string name="no_downloads_subtitle">הדבק קישור בדף הבית כדי להתחיל</string>
+    <string name="download_complete">הורדה הושלמה</string>
+    <string name="download_failed">ההורדה נכשלה</string>
+    <string name="download_in_progress">מוריד…</string>
+    <string name="download_pending">ממתין…</string>
+    <string name="tap_to_open">לחץ לפתיחה</string>
+    <string name="delete">מחק</string>
+    <string name="share">שתף</string>
+    <string name="open">פתח</string>
+    <string name="retry">נסה שוב</string>
+    <string name="cancel">ביטול</string>
+
+    <!-- Settings Screen -->
+    <string name="default_format">פורמט ברירת מחדל</string>
+    <string name="default_quality">איכות ברירת מחדל</string>
+    <string name="about">אודות</string>
+    <string name="app_version">גרסה %1$s</string>
+    <string name="disclaimer_title">הצהרה חשובה</string>
+    <string name="disclaimer_text">אפליקציה זו מיועדת להורדת תוכן שיש לך זכויות להורדתו. הורדת תוכן מוגן בזכויות יוצרים ללא רשות אסורה על פי חוק.</string>
+    <string name="clear_history">נקה היסטוריה</string>
+    <string name="clear_history_confirm">האם אתה בטוח שברצונך למחוק את כל ההיסטוריה?</string>
+    <string name="yes">כן</string>
+    <string name="no">לא</string>
+
+    <!-- Errors -->
+    <string name="error_invalid_url">הקישור לא תקין. הדבק קישור מיוטיוב או פייסבוק.</string>
+    <string name="error_no_internet">אין חיבור לאינטרנט</string>
+    <string name="error_download_failed">ההורדה נכשלה. נסה שוב.</string>
+    <string name="error_generic">אירעה שגיאה. נסה שוב.</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_name">הורדות</string>
+    <string name="notification_channel_desc">התראות על הורדות פעילות</string>
+    <string name="notification_downloading">מוריד: %1$s</string>
+    <string name="notification_complete">ההורדה הושלמה: %1$s</string>
+    <string name="notification_failed">ההורדה נכשלה: %1$s</string>
+
+    <!-- Platforms -->
+    <string name="platform_youtube">יוטיוב</string>
+    <string name="platform_facebook">פייסבוק</string>
+    <string name="platform_unknown">אחר</string>
+</resources>
