@@ -9,6 +9,8 @@ import android.text.SpannableString
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
@@ -73,8 +75,22 @@ class ShareAndSchedulerInstrumentedTest {
             device.findObject(By.desc("נקה קישור")).click()
             assertTrue(device.wait(Until.gone(By.text(url)), 5_000))
 
-            scenario.onActivity { activity -> activity.startActivity(shareIntent(activity, url)) }
+            var originalActivityIdentity = 0
+            scenario.onActivity { activity ->
+                originalActivityIdentity = System.identityHashCode(activity)
+                activity.startActivity(shareIntent(activity, url))
+            }
             assertTrue(device.wait(Until.hasObject(By.text(url)), 5_000))
+
+            var resumedActivityIdentity = 0
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                val resumedActivities = ActivityLifecycleMonitorRegistry.getInstance()
+                    .getActivitiesInStage(Stage.RESUMED)
+                    .filterIsInstance<MainActivity>()
+                assertEquals(1, resumedActivities.size)
+                resumedActivityIdentity = System.identityHashCode(resumedActivities.single())
+            }
+            assertEquals(originalActivityIdentity, resumedActivityIdentity)
         }
     }
 
@@ -86,7 +102,11 @@ class ShareAndSchedulerInstrumentedTest {
             PackageManager.MATCH_DEFAULT_ONLY,
         )
 
-        assertTrue(matches.any { it.activityInfo.name == MainActivity::class.java.name })
+        val mainActivityMatch = matches.firstOrNull {
+            it.activityInfo.name == MainActivity::class.java.name
+        }
+        assertTrue(mainActivityMatch != null)
+        assertTrue(mainActivityMatch!!.activityInfo.exported)
     }
 
     @Test
