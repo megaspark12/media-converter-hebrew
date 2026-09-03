@@ -180,7 +180,13 @@ internal suspend fun enqueueForegroundWork(enqueue: () -> Future<*>) {
 }
 
 object YoutubeDlVersionReader {
-    fun version(context: Context): String? = runCatching {
+    fun version(context: Context): String? = readYoutubeDlVersion {
         com.yausername.youtubedl_android.YoutubeDL.getInstance().versionName(context)
-    }.getOrNull()
+    }
+}
+
+internal fun readYoutubeDlVersion(read: () -> String?): String? = try {
+    read()
+} catch (_: Exception) {
+    null
 }

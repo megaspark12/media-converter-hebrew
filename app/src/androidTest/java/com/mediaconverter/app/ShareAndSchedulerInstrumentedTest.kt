@@ -2,6 +2,8 @@ package com.mediaconverter.app
 
 import android.Manifest
 import android.content.Intent
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.text.SpannableString
 import androidx.test.core.app.ActivityScenario
@@ -35,11 +37,7 @@ class ShareAndSchedulerInstrumentedTest {
     fun styledSharedTextPopulatesInputOnColdStart() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val url = "https://youtu.be/styled-fixture"
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_SEND
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, SpannableString("Shared text $url"))
-        }
+        val intent = shareIntent(context, SpannableString("Shared text $url"))
 
         ActivityScenario.launch<MainActivity>(intent).use {
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -52,11 +50,7 @@ class ShareAndSchedulerInstrumentedTest {
     fun sharedUrlPopulatesInputOnColdStart() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val url = "https://youtu.be/test-fixture"
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_SEND
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, "Shared text $url")
-        }
+        val intent = shareIntent(context, "Shared text $url")
 
         ActivityScenario.launch<MainActivity>(intent).use {
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -69,11 +63,7 @@ class ShareAndSchedulerInstrumentedTest {
     fun identicalSharedUrlIsHandledAgainOnWarmLaunch() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val url = "https://youtu.be/repeated-fixture"
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_SEND
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, url)
-        }
+        val intent = shareIntent(context, url)
 
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -83,25 +73,27 @@ class ShareAndSchedulerInstrumentedTest {
             device.findObject(By.desc("נקה קישור")).click()
             assertTrue(device.wait(Until.gone(By.text(url)), 5_000))
 
-            scenario.onActivity { activity ->
-                MainActivity::class.java
-                    .getDeclaredMethod("onNewIntent", Intent::class.java)
-                    .apply { isAccessible = true }
-                    .invoke(activity, intent)
-            }
+            scenario.onActivity { activity -> activity.startActivity(shareIntent(activity, url)) }
             assertTrue(device.wait(Until.hasObject(By.text(url)), 5_000))
         }
+    }
+
+    @Test
+    fun manifestResolvesImplicitPlainTextShareToMainActivity() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val matches = context.packageManager.queryIntentActivities(
+            shareIntent(context, "https://youtu.be/resolution-fixture"),
+            PackageManager.MATCH_DEFAULT_ONLY,
+        )
+
+        assertTrue(matches.any { it.activityInfo.name == MainActivity::class.java.name })
     }
 
     @Test
     fun recreationDoesNotReplayTheOriginalShareIntent() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val url = "https://youtu.be/recreation-fixture"
-        val intent = Intent(context, MainActivity::class.java).apply {
-            action = Intent.ACTION_SEND
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, url)
-        }
+        val intent = shareIntent(context, url)
 
         ActivityScenario.launch<MainActivity>(intent).use { scenario ->
             val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -136,5 +128,11 @@ class ShareAndSchedulerInstrumentedTest {
             ),
             2_000,
         )?.click()
+    }
+
+    private fun shareIntent(context: Context, text: CharSequence) = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        `package` = context.packageName
+        putExtra(Intent.EXTRA_TEXT, text)
     }
 }

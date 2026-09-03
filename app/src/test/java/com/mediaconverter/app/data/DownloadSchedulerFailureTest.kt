@@ -14,6 +14,17 @@ import java.util.concurrent.CompletableFuture
 @OptIn(ExperimentalCoroutinesApi::class)
 class DownloadSchedulerFailureTest {
     @Test
+    fun versionReaderDoesNotSwallowFatalVmErrors() {
+        val fatal = LinkageError("native runtime fatal")
+
+        val thrown = runCatching {
+            readYoutubeDlVersion { throw fatal }
+        }.exceptionOrNull()
+
+        assertTrue("Expected the original fatal error, got $thrown", thrown === fatal)
+    }
+
+    @Test
     fun dispatchExceptionMarksInsertedDownloadFailedBeforeRethrowing() = runTest {
         var persistedError: String? = null
 

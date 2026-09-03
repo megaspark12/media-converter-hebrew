@@ -228,6 +228,35 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun sharingErroredUrlAgainStartsAFreshMetadataRequest() = runTest(mainDispatcherRule.dispatcher) {
+        var attempts = 0
+        val provider = object : MediaInfoProvider {
+            override suspend fun getVideoInfo(url: NormalizedMediaUrl): Result<VideoInfo> {
+                attempts += 1
+                return if (attempts == 1) {
+                    Result.failure(IllegalStateException("temporary failure"))
+                } else {
+                    Result.success(VideoInfo("recovered", "", 1, url.platform.value))
+                }
+            }
+        }
+        val viewModel = HomeViewModel(provider)
+        val url = "https://youtu.be/repeated-after-error"
+        viewModel.onUrlChange(url)
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.linkState is LinkUiState.Error)
+
+        viewModel.onSharedUrl(url)
+        advanceTimeBy(600)
+        advanceUntilIdle()
+
+        assertEquals(2, attempts)
+        val ready = viewModel.uiState.value.linkState as LinkUiState.Ready
+        assertEquals("recovered", ready.info.title)
+    }
+
+    @Test
     fun completedOlderStartDoesNotReclaimUiAfterNewShare() = runTest(mainDispatcherRule.dispatcher) {
         val command = SuspendedStartDownloadCommand()
         val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
