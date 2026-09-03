@@ -15,9 +15,14 @@ data class DownloadEntity(
     val progress: Int = 0,
     val status: String = "pending", // "pending", "downloading", "completed", "failed"
     val filePath: String = "",
+    val outputUri: String = "",
+    val mimeType: String = "",
     val fileSize: Long = 0,
     val thumbnailUrl: String = "",
     val errorMessage: String = "",
+    val errorCode: String = "",
+    val ytDlpVersion: String = "",
+    val retryCount: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
 )

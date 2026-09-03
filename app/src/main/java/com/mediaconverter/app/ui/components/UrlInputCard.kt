@@ -11,6 +11,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.mediaconverter.app.R
 
@@ -20,6 +22,7 @@ fun UrlInputCard(
     url: String,
     onUrlChange: (String) -> Unit,
     onPasteClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -36,6 +39,7 @@ fun UrlInputCard(
             OutlinedTextField(
                 value = url,
                 onValueChange = onUrlChange,
+                enabled = enabled,
                 modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text(stringResource(R.string.paste_url_hint)) },
                 leadingIcon = {
@@ -47,7 +51,7 @@ fun UrlInputCard(
                 },
                 trailingIcon = {
                     if (url.isEmpty()) {
-                        FilledTonalIconButton(onClick = onPasteClick) {
+                        FilledTonalIconButton(onClick = onPasteClick, enabled = enabled) {
                             Icon(
                                 imageVector = Icons.Default.ContentPaste,
                                 contentDescription = stringResource(R.string.paste_button)
@@ -55,7 +59,13 @@ fun UrlInputCard(
                         }
                     } else {
                         // Clear button could go here
-                        IconButton(onClick = { onUrlChange("") }) {
+                        IconButton(
+                            onClick = { onUrlChange("") },
+                            enabled = enabled,
+                            modifier = Modifier.semantics {
+                                contentDescription = "נקה קישור"
+                            },
+                        ) {
                             Text("✕", style = MaterialTheme.typography.titleMedium)
                         }
                     }

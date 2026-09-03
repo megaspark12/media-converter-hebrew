@@ -28,8 +28,15 @@ class DownloadRepository(private val context: Context) {
     suspend fun updateProgress(id: Long, progress: Int, status: String) =
         downloadDao.updateProgress(id, progress, status)
 
-    suspend fun markFailed(id: Long, error: String) = downloadDao.markFailed(id, error)
+    suspend fun markFailed(id: Long, error: String, errorCode: String) =
+        downloadDao.markFailed(id, error, errorCode)
 
-    suspend fun markCompleted(id: Long, filePath: String, fileSize: Long) =
-        downloadDao.markCompleted(id, filePath, fileSize)
+    suspend fun markRetryPending(id: Long, error: String, errorCode: String) =
+        downloadDao.markRetryPending(id, error, errorCode)
+
+    suspend fun markCompleted(id: Long, savedMedia: SavedMedia) =
+        downloadDao.markCompleted(id, savedMedia.contentUri, savedMedia.mimeType, savedMedia.sizeBytes)
+
+    suspend fun markCancelled(id: Long) =
+        downloadDao.markCancelled(id, ConversionFailure.CANCELLED.code)
 }

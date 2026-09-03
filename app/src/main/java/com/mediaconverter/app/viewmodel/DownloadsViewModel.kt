@@ -1,6 +1,7 @@
 package com.mediaconverter.app.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.mediaconverter.app.data.DownloadRepository
@@ -23,14 +24,21 @@ class DownloadsViewModel(application: Application) : AndroidViewModel(applicatio
         
     fun deleteDownloadRecord(download: DownloadEntity) {
         viewModelScope.launch {
-            repository.deleteDownload(download)
-            // Optional: delete actual file as well
-            if (download.filePath.isNotEmpty()) {
+            if (download.outputUri.isNotEmpty()) {
+                runCatching {
+                    getApplication<Application>().contentResolver.delete(
+                        Uri.parse(download.outputUri),
+                        null,
+                        null,
+                    )
+                }
+            } else if (download.filePath.isNotEmpty()) {
                 val file = java.io.File(download.filePath)
                 if (file.exists()) {
                     file.delete()
                 }
             }
+            repository.deleteDownload(download)
         }
     }
     

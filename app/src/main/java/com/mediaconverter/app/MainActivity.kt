@@ -1,6 +1,7 @@
 package com.mediaconverter.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -12,11 +13,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import com.mediaconverter.app.data.ShareTextParser
 import com.mediaconverter.app.ui.screens.HomeScreen
 import com.mediaconverter.app.ui.theme.MediaConverterTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
+
+    private val sharedUrl = MutableStateFlow<String?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -27,6 +34,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        consumeShareIntent(intent)
         
         // Request necessary permissions based on Android version
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -42,15 +50,26 @@ class MainActivity : ComponentActivity() {
         }
         
         setContent {
+            val incomingUrl by sharedUrl.collectAsState()
             MediaConverterTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    // Removed AppNavigation, just showing HomeScreen
-                    HomeScreen()
+                    HomeScreen(sharedUrl = incomingUrl)
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeShareIntent(intent)
+    }
+
+    private fun consumeShareIntent(intent: Intent?) {
+        val text = intent?.getStringExtra(Intent.EXTRA_TEXT)
+        sharedUrl.value = ShareTextParser.parse(intent?.action, intent?.type, text)?.value
     }
 }
