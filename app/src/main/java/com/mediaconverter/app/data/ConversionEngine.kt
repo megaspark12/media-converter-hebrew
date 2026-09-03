@@ -134,7 +134,7 @@ class YtDlpMediaExtractor(private val runtime: YtDlpRuntime) : MediaExtractor {
                 break
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (failure: Throwable) {
+            } catch (failure: Exception) {
                 val mapped = ConversionFailureMapper.fromThrowable(failure)
                 finalFailure = ConversionException(
                     mapped,
@@ -222,7 +222,7 @@ class FfmpegMediaTranscoder(
     override fun cancel() = executor.cancel()
 }
 
-class AndroidMediaValidator : MediaValidator {
+open class AndroidMediaValidator : MediaValidator {
     override fun inspect(file: File): MediaInspection {
         if (!file.isFile || file.length() <= 0L) {
             return MediaInspection(0, 0, hasAudio = false, hasVideo = false)
@@ -253,7 +253,11 @@ class AndroidMediaValidator : MediaValidator {
 
     override fun isValid(file: File, format: OutputFormat): Boolean {
         if (!file.name.endsWith(".${format.extension}", ignoreCase = true)) return false
-        val inspection = runCatching { inspect(file) }.getOrNull() ?: return false
+        val inspection = try {
+            inspect(file)
+        } catch (_: Exception) {
+            return false
+        }
         if (inspection.sizeBytes <= 0L || inspection.durationMillis <= 0L) return false
         return when (format) {
             OutputFormat.MP3 -> inspection.hasAudio && !inspection.hasVideo
@@ -443,7 +447,7 @@ class ConversionEngine(
         } catch (cancelled: CancellationException) {
             transcoder.cancel()
             throw cancelled
-        } catch (failure: Throwable) {
+        } catch (failure: Exception) {
             Result.failure(
                 failure as? ConversionException
                     ?: ConversionException(

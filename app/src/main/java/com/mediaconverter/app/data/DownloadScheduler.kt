@@ -18,7 +18,9 @@ import com.mediaconverter.app.data.db.AppDatabase
 import com.mediaconverter.app.data.db.DownloadEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 enum class DownloadBackend { USER_INITIATED_JOB, FOREGROUND_WORKER }
@@ -87,17 +89,21 @@ class ApiAwareDownloadScheduler(private val context: Context) : DownloadSchedule
     }
 
     private suspend fun dispatch(downloadId: Long) {
-        val scheduled = when (DownloadBackendSelector.forApi(Build.VERSION.SDK_INT)) {
-            DownloadBackend.USER_INITIATED_JOB -> scheduleUserInitiatedJob(downloadId)
-            DownloadBackend.FOREGROUND_WORKER -> scheduleForegroundWorker(downloadId)
-        }
-        if (!scheduled) {
-            dao.markFailed(downloadId, "Unable to schedule download", ConversionFailure.DOWNLOAD_FAILED.code)
-            throw IllegalStateException("Unable to schedule download $downloadId")
-        }
+        dispatchOrMarkFailed(
+            downloadId = downloadId,
+            performDispatch = {
+                when (DownloadBackendSelector.forApi(Build.VERSION.SDK_INT)) {
+                    DownloadBackend.USER_INITIATED_JOB -> scheduleUserInitiatedJob(downloadId)
+                    DownloadBackend.FOREGROUND_WORKER -> scheduleForegroundWorker(downloadId)
+                }
+            },
+            markFailed = { error ->
+                dao.markFailed(downloadId, error, ConversionFailure.DOWNLOAD_FAILED.code)
+            },
+        )
     }
 
-    private fun scheduleForegroundWorker(downloadId: Long): Boolean {
+    private suspend fun scheduleForegroundWorker(downloadId: Long): Boolean {
         val request = OneTimeWorkRequestBuilder<DownloadWorker>()
             .setInputData(Data.Builder().putLong(DownloadWorker.KEY_DOWNLOAD_ID, downloadId).build())
             .setConstraints(
@@ -109,7 +115,9 @@ class ApiAwareDownloadScheduler(private val context: Context) : DownloadSchedule
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .addTag(workName(downloadId))
             .build()
-        workManager.enqueueUniqueWork(workName(downloadId), ExistingWorkPolicy.REPLACE, request)
+        enqueueForegroundWork {
+            workManager.enqueueUniqueWork(workName(downloadId), ExistingWorkPolicy.REPLACE, request).result
+        }
         return true
     }
 
@@ -137,6 +145,37 @@ class ApiAwareDownloadScheduler(private val context: Context) : DownloadSchedule
         const val EXTRA_DOWNLOAD_ID = "download_id"
         fun jobId(downloadId: Long): Int = (downloadId % 999_999L).toInt() + 1
         fun workName(downloadId: Long) = "download-$downloadId"
+    }
+}
+
+internal suspend fun dispatchOrMarkFailed(
+    downloadId: Long,
+    performDispatch: suspend () -> Boolean,
+    markFailed: suspend (String) -> Unit,
+) {
+    withContext(NonCancellable) {
+        val scheduled = try {
+            performDispatch()
+        } catch (failure: Exception) {
+            val detail = failure.message?.takeIf { it.isNotBlank() }
+            val error = if (detail == null) {
+                "Unable to schedule download"
+            } else {
+                "Unable to schedule download: $detail"
+            }
+            markFailed(error)
+            throw failure
+        }
+        if (!scheduled) {
+            markFailed("Unable to schedule download")
+            throw IllegalStateException("Unable to schedule download $downloadId")
+        }
+    }
+}
+
+internal suspend fun enqueueForegroundWork(enqueue: () -> Future<*>) {
+    withContext(NonCancellable + Dispatchers.IO) {
+        enqueue().get()
     }
 }
 

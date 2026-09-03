@@ -27,6 +27,8 @@ import com.mediaconverter.app.ui.theme.GradientMid
 import com.mediaconverter.app.ui.theme.GradientStart
 import com.mediaconverter.app.viewmodel.HomeViewModel
 import com.mediaconverter.app.viewmodel.LinkUiState
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 @Composable
 fun HomeScreen(
@@ -35,15 +37,15 @@ fun HomeScreen(
             LocalContext.current.applicationContext as android.app.Application,
         ),
     ),
-    sharedUrl: String? = null,
+    sharedUrls: Flow<String> = emptyFlow(),
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
 
-    LaunchedEffect(sharedUrl) {
-        if (!sharedUrl.isNullOrBlank()) viewModel.onUrlChange(sharedUrl)
+    LaunchedEffect(sharedUrls) {
+        sharedUrls.collect(viewModel::onSharedUrl)
     }
 
     Column(

@@ -93,12 +93,31 @@ class HomeViewModel(
     private var metadataJob: Job? = null
     private var cancellationMessageJob: Job? = null
     private var requestId = 0L
+    private var uiSessionId = 0L
+
+    fun onSharedUrl(input: String) {
+        uiSessionId += 1
+        if (_uiState.value.isDownloading) {
+            _uiState.value = _uiState.value.copy(
+                isDownloading = false,
+                activeDownloadId = null,
+                downloadProgress = 0,
+                downloadMessage = null,
+                downloadCompleted = false,
+            )
+        }
+        updateUrl(input, forceNewSession = true)
+    }
 
     fun onUrlChange(input: String) {
         if (_uiState.value.isDownloading) return
+        updateUrl(input)
+    }
+
+    private fun updateUrl(input: String, forceNewSession: Boolean = false) {
         val parsed = MediaUrlParser.parse(input)
         val displayValue = parsed?.value ?: input
-        if (displayValue == _uiState.value.url) return
+        if (!forceNewSession && displayValue == _uiState.value.url) return
 
         metadataJob?.cancel()
         cancellationMessageJob?.cancel()
@@ -195,27 +214,35 @@ class HomeViewModel(
         }
         if (state.linkState !is LinkUiState.Ready || state.isDownloading) return
         val command = downloadCommand ?: return
+        val startSessionId = uiSessionId
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isDownloading = true,
-                downloadMessage = "מוסיף את ההורדה לתור…",
-            )
-            runCatching { command.start(state) }
-                .onSuccess {
+            if (startSessionId == uiSessionId) {
+                _uiState.value = _uiState.value.copy(
+                    isDownloading = true,
+                    downloadMessage = "מוסיף את ההורדה לתור…",
+                )
+            }
+            try {
+                val downloadId = command.start(state)
+                if (startSessionId == uiSessionId) {
                     _uiState.value = _uiState.value.copy(
                         isDownloading = true,
-                        activeDownloadId = it,
+                        activeDownloadId = downloadId,
                         downloadProgress = 0,
                         downloadMessage = "ההורדה החלה… 0%",
                     )
-                    observeDownload(command, it)
+                    observeDownload(command, downloadId)
                 }
-                .onFailure {
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (startSessionId == uiSessionId) {
                     _uiState.value = _uiState.value.copy(
                         isDownloading = false,
                         downloadMessage = "לא ניתן להתחיל את ההורדה",
                     )
                 }
+            }
         }
     }
 

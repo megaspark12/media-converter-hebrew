@@ -17,6 +17,8 @@ android {
         versionName = "1.1.0"
 
         ndk {
+            // Intentional distribution policy: ship only to 64-bit ARM devices.
+            // CI runs the native conversion stack on arm64-v8a emulators.
             abiFilters += listOf("arm64-v8a")
         }
     }

@@ -7,6 +7,7 @@ import com.mediaconverter.app.data.VideoInfo
 import com.mediaconverter.app.data.db.DownloadEntity
 import com.mediaconverter.app.test.MainDispatcherRule
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.advanceTimeBy
@@ -171,6 +172,86 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun sharedUrlOverridesActiveDownloadUiWithoutCancellingBackgroundWork() = runTest(mainDispatcherRule.dispatcher) {
+        val command = FakeDownloadCommand()
+        val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
+        viewModel.onUrlChange("https://youtu.be/first")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+
+        viewModel.onSharedUrl("https://youtu.be/second")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+
+        val ready = viewModel.uiState.value.linkState as LinkUiState.Ready
+        assertEquals("https://youtu.be/second", ready.url.value)
+        assertEquals(false, viewModel.uiState.value.isDownloading)
+        assertEquals(null, viewModel.uiState.value.activeDownloadId)
+        assertTrue(command.cancelledIds.isEmpty())
+
+        command.emit(
+            DownloadEntity(id = 7, url = "https://youtu.be/first", status = "completed", progress = 100),
+        )
+        runCurrent()
+        assertEquals("https://youtu.be/second", viewModel.uiState.value.url)
+        assertEquals(false, viewModel.uiState.value.downloadCompleted)
+    }
+
+    @Test
+    fun sharingCompletedUrlAgainStartsAFreshDownloadSession() = runTest(mainDispatcherRule.dispatcher) {
+        val command = FakeDownloadCommand()
+        val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
+        val url = "https://youtu.be/repeated-after-completion"
+        viewModel.onUrlChange(url)
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+        command.emit(
+            DownloadEntity(id = 7, url = url, status = "completed", progress = 100),
+        )
+        runCurrent()
+
+        viewModel.onSharedUrl(url)
+        advanceTimeBy(600)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.linkState is LinkUiState.Ready)
+        assertEquals(false, viewModel.uiState.value.downloadCompleted)
+        assertEquals(null, viewModel.uiState.value.downloadMessage)
+
+        viewModel.startDownload()
+        runCurrent()
+        assertEquals(8L, viewModel.uiState.value.activeDownloadId)
+    }
+
+    @Test
+    fun completedOlderStartDoesNotReclaimUiAfterNewShare() = runTest(mainDispatcherRule.dispatcher) {
+        val command = SuspendedStartDownloadCommand()
+        val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
+        viewModel.onUrlChange("https://youtu.be/first")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+
+        viewModel.startDownload()
+        runCurrent()
+        assertTrue(command.startEntered.isCompleted)
+
+        viewModel.onSharedUrl("https://youtu.be/second")
+        command.startResult.complete(41L)
+        runCurrent()
+        advanceTimeBy(600)
+        advanceUntilIdle()
+
+        val ready = viewModel.uiState.value.linkState as LinkUiState.Ready
+        assertEquals("https://youtu.be/second", ready.url.value)
+        assertEquals(false, viewModel.uiState.value.isDownloading)
+        assertEquals(null, viewModel.uiState.value.activeDownloadId)
+    }
+
+    @Test
     fun olderCancellationTimerCannotClearANewerConfirmation() = runTest(mainDispatcherRule.dispatcher) {
         val command = FakeDownloadCommand()
         val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
@@ -200,15 +281,31 @@ class HomeViewModelTest {
     }
 }
 
+private class SuspendedStartDownloadCommand : DownloadCommand {
+    val startEntered = CompletableDeferred<Unit>()
+    val startResult = CompletableDeferred<Long>()
+
+    override suspend fun start(state: HomeUiState): Long {
+        startEntered.complete(Unit)
+        return startResult.await()
+    }
+
+    override fun observe(downloadId: Long): Flow<DownloadEntity?> = MutableSharedFlow()
+
+    override suspend fun cancel(downloadId: Long) = Unit
+}
+
 private class FakeDownloadCommand : DownloadCommand {
     private var nextId = 7L
     private val recordsById = mutableMapOf<Long, MutableSharedFlow<DownloadEntity?>>()
+    val cancelledIds = mutableListOf<Long>()
 
     override suspend fun start(state: HomeUiState): Long = nextId++
 
     override fun observe(downloadId: Long): Flow<DownloadEntity?> = records(downloadId)
 
     override suspend fun cancel(downloadId: Long) {
+        cancelledIds += downloadId
         emit(
             DownloadEntity(id = downloadId, url = "https://youtu.be/progress", status = "cancelled"),
         )

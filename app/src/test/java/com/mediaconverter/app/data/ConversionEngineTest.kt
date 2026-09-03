@@ -55,6 +55,68 @@ class ConversionEngineTest {
         cacheRoot.delete()
     }
 
+    @Test
+    fun fatalVmErrorsPropagateInsteadOfBecomingDownloadFailures() = runTest {
+        val cacheRoot = Files.createTempDirectory("conversion-fatal-test").toFile()
+        val fatal = OutOfMemoryError("fatal")
+        val engine = ConversionEngine(
+            cacheRoot,
+            MediaExtractor { _, _, _ -> throw fatal },
+            FakeTranscoder(),
+            FakePublisher(),
+            FakeValidator(),
+        )
+
+        val thrown = runCatching {
+            engine.convert(request(OutputFormat.MP4), "hello")
+        }.exceptionOrNull()
+
+        assertTrue(thrown === fatal)
+        assertTrue(cacheRoot.listFiles().orEmpty().isEmpty())
+        cacheRoot.delete()
+    }
+
+    @Test
+    fun ytDlpExtractorDoesNotMapFatalVmErrorsToConversionFailures() = runTest {
+        val fatal = OutOfMemoryError("yt-dlp fatal")
+        val runtime = YtDlpRuntime(
+            client = object : YtDlpClient {
+                override suspend fun initialize() = Unit
+                override suspend fun execute(command: YtDlpCommand): YtDlpResult = throw fatal
+                override suspend fun update() = true
+                override fun cancel(processId: String) = Unit
+                override fun version(): String? = "test"
+            },
+            updateStore = object : YtDlpUpdateStore {
+                override suspend fun readLastUpdateMillis() = 0L
+                override suspend fun writeLastUpdateMillis(value: Long) = Unit
+            },
+            nowMillis = { 0L },
+        )
+        val directory = Files.createTempDirectory("extractor-fatal-test").toFile()
+
+        val thrown = runCatching {
+            YtDlpMediaExtractor(runtime).downloadSource(request(OutputFormat.MP4), directory) { _, _ -> }
+        }.exceptionOrNull()
+
+        assertTrue("Expected the original fatal error, got $thrown", thrown === fatal)
+        directory.deleteRecursively()
+    }
+
+    @Test
+    fun mediaValidatorDoesNotConvertFatalInspectionErrorsToInvalidMedia() {
+        val fatal = OutOfMemoryError("inspection fatal")
+        val validator = object : AndroidMediaValidator() {
+            override fun inspect(file: File): MediaInspection = throw fatal
+        }
+
+        val thrown = runCatching {
+            validator.isValid(File("output.mp4"), OutputFormat.MP4)
+        }.exceptionOrNull()
+
+        assertTrue("Expected the original fatal error, got $thrown", thrown === fatal)
+    }
+
     private fun request(format: OutputFormat) = ConversionRequest(
         42,
         NormalizedMediaUrl("https://youtu.be/test", SupportedPlatform.YOUTUBE),
