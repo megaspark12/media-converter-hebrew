@@ -6,7 +6,7 @@ import com.mediaconverter.app.data.db.AppDatabase
 import com.mediaconverter.app.data.db.DownloadDao
 import com.mediaconverter.app.data.db.DownloadEntity
 
-class DownloadRepository(private val context: Context) {
+class DownloadRepository(private val context: Context) : DownloadTaskStore {
     private val downloadDao: DownloadDao = AppDatabase.getInstance(context).downloadDao()
 
     fun getAllDownloads(): Flow<List<DownloadEntity>> = downloadDao.getAllDownloads()
@@ -15,7 +15,7 @@ class DownloadRepository(private val context: Context) {
 
     fun getCompletedDownloads(): Flow<List<DownloadEntity>> = downloadDao.getCompletedDownloads()
 
-    suspend fun getDownloadById(id: Long): DownloadEntity? = downloadDao.getDownloadById(id)
+    override suspend fun getDownloadById(id: Long): DownloadEntity? = downloadDao.getDownloadById(id)
 
     suspend fun insertDownload(download: DownloadEntity): Long = downloadDao.insertDownload(download)
 
@@ -25,11 +25,18 @@ class DownloadRepository(private val context: Context) {
 
     suspend fun deleteAll() = downloadDao.deleteAll()
 
-    suspend fun updateProgress(id: Long, progress: Int, status: String) =
+    override suspend fun updateProgress(id: Long, progress: Int, status: String) =
         downloadDao.updateProgress(id, progress, status)
 
-    suspend fun markFailed(id: Long, error: String) = downloadDao.markFailed(id, error)
+    override suspend fun markFailed(id: Long, error: String, errorCode: String) =
+        downloadDao.markFailed(id, error, errorCode)
 
-    suspend fun markCompleted(id: Long, filePath: String, fileSize: Long) =
-        downloadDao.markCompleted(id, filePath, fileSize)
+    override suspend fun markRetryPending(id: Long, error: String, errorCode: String) =
+        downloadDao.markRetryPending(id, error, errorCode)
+
+    override suspend fun markCompleted(id: Long, savedMedia: SavedMedia) =
+        downloadDao.markCompleted(id, savedMedia.contentUri, savedMedia.mimeType, savedMedia.sizeBytes)
+
+    suspend fun markCancelled(id: Long) =
+        downloadDao.markCancelled(id, ConversionFailure.CANCELLED.code)
 }

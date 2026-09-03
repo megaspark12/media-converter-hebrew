@@ -14,12 +14,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.mediaconverter.app.R
-import com.mediaconverter.app.data.MediaFormat
+import com.mediaconverter.app.data.OutputFormat
 
 @Composable
 fun FormatSelector(
-    selectedFormat: MediaFormat,
-    onFormatSelected: (MediaFormat) -> Unit,
+    selectedFormat: OutputFormat,
+    onFormatSelected: (OutputFormat) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier) {
@@ -37,16 +37,16 @@ fun FormatSelector(
                 modifier = Modifier.weight(1f),
                 title = stringResource(R.string.video_mp4),
                 icon = { Icon(Icons.Default.VideoFile, null) },
-                isSelected = selectedFormat == MediaFormat.MP4,
-                onClick = { onFormatSelected(MediaFormat.MP4) }
+                isSelected = selectedFormat == OutputFormat.MP4,
+                onClick = { onFormatSelected(OutputFormat.MP4) }
             )
             
             FormatCard(
                 modifier = Modifier.weight(1f),
                 title = stringResource(R.string.audio_mp3),
                 icon = { Icon(Icons.Default.Audiotrack, null) },
-                isSelected = selectedFormat == MediaFormat.MP3,
-                onClick = { onFormatSelected(MediaFormat.MP3) }
+                isSelected = selectedFormat == OutputFormat.MP3,
+                onClick = { onFormatSelected(OutputFormat.MP3) }
             )
         }
     }

@@ -13,11 +13,13 @@ android {
         applicationId = "com.mediaconverter.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         ndk {
-            abiFilters += listOf("x86", "x86_64", "armeabi-v7a", "arm64-v8a")
+            // Intentional distribution policy: ship only to 64-bit ARM devices.
+            // CI runs the native conversion stack on arm64-v8a emulators.
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -85,6 +87,7 @@ dependencies {
   androidTestImplementation(libs.androidx.test.core)
   androidTestImplementation(libs.androidx.test.ext.junit)
   androidTestImplementation(libs.androidx.test.runner)
+  androidTestImplementation(libs.androidx.test.uiautomator)
   androidTestImplementation(libs.androidx.test.espresso.core)
 
   // Navigation
@@ -102,7 +105,8 @@ dependencies {
 
   // yt-dlp Android wrapper
   implementation(libs.youtubedl.android.library)
-  implementation(libs.youtubedl.android.ffmpeg)
+  implementation(libs.ffmpeg.kit.full)
+  implementation(libs.smart.exception.java)
 
   // Kotlinx Serialization
   implementation(libs.kotlinx.serialization.json)

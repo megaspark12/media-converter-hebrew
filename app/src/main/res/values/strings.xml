@@ -6,6 +6,7 @@
     <string name="paste_url_hint">הדבק קישור מיוטיוב או פייסבוק</string>
     <string name="paste_button">הדבק</string>
     <string name="download_button">הורד</string>
+    <string name="download_another_button">הורד עוד אחד</string>
     <string name="downloading">מוריד…</string>
     <string name="choose_format">בחר פורמט</string>
     <string name="video_mp4">וידאו (MP4)</string>
@@ -42,6 +43,7 @@
     <string name="open">פתח</string>
     <string name="retry">נסה שוב</string>
     <string name="cancel">ביטול</string>
+    <string name="clear">נקה</string>
 
     <!-- Settings Screen -->
     <string name="default_format">פורמט ברירת מחדל</string>

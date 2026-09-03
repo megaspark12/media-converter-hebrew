@@ -2,34 +2,42 @@ package com.mediaconverter.app
 
 import android.app.Application
 import android.util.Log
-import com.yausername.ffmpeg.FFmpeg
-import com.yausername.youtubedl_android.YoutubeDL
-import kotlinx.coroutines.DelicateCoroutinesApi
+import androidx.work.Configuration
+import com.mediaconverter.app.data.YtDlpRuntimeProvider
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-class MediaConverterApp : Application() {
+class MediaConverterApp : Application(), Configuration.Provider {
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
-        
-        try {
-            FFmpeg.getInstance().init(this)
-            YoutubeDL.getInstance().init(this)
-            Log.d("MediaConverterApp", "YoutubeDL and FFmpeg initialized successfully")
-            
-            // Update yt-dlp in the background to prevent 403 Forbidden errors
-            @OptIn(DelicateCoroutinesApi::class)
-            GlobalScope.launch(Dispatchers.IO) {
-                try {
-                    YoutubeDL.getInstance().updateYoutubeDL(this@MediaConverterApp, YoutubeDL.UpdateChannel.STABLE)
-                    Log.d("MediaConverterApp", "YoutubeDL updated successfully")
-                } catch (e: Exception) {
-                    Log.e("MediaConverterApp", "Failed to update YoutubeDL", e)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("MediaConverterApp", "Failed to initialize YoutubeDL", e)
+        applicationScope.launch {
+            refreshYtDlp(
+                refresh = { YtDlpRuntimeProvider.get(this@MediaConverterApp).refreshIfDue() },
+                logFailure = { Log.w("MediaConverterApp", "yt-dlp refresh skipped", it) },
+            )
         }
+    }
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setJobSchedulerJobIdRange(1_000_000, 2_000_000)
+            .build()
+}
+
+internal suspend fun refreshYtDlp(
+    refresh: suspend () -> Unit,
+    logFailure: (Throwable) -> Unit,
+) {
+    try {
+        refresh()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        logFailure(failure)
     }
 }

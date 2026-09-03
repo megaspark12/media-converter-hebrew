@@ -23,6 +23,9 @@ interface DownloadDao {
     @Query("SELECT * FROM downloads WHERE id = :id")
     suspend fun getDownloadById(id: Long): DownloadEntity?
 
+    @Query("SELECT * FROM downloads WHERE id = :id")
+    fun observeDownloadById(id: Long): Flow<DownloadEntity?>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDownload(download: DownloadEntity): Long
 
@@ -35,12 +38,27 @@ interface DownloadDao {
     @Query("DELETE FROM downloads")
     suspend fun deleteAll()
 
-    @Query("UPDATE downloads SET progress = :progress, status = :status WHERE id = :id")
-    suspend fun updateProgress(id: Long, progress: Int, status: String)
+    @Query("UPDATE downloads SET progress = :progress, status = :status WHERE id = :id AND status IN ('pending', 'downloading')")
+    suspend fun updateProgress(id: Long, progress: Int, status: String): Int
 
-    @Query("UPDATE downloads SET status = 'failed', errorMessage = :error WHERE id = :id")
-    suspend fun markFailed(id: Long, error: String)
+    @Query("UPDATE downloads SET status = 'failed', errorMessage = :error, errorCode = :errorCode WHERE id = :id AND status IN ('pending', 'downloading')")
+    suspend fun markFailed(id: Long, error: String, errorCode: String): Int
 
-    @Query("UPDATE downloads SET status = 'completed', progress = 100, filePath = :filePath, fileSize = :fileSize, completedAt = :completedAt WHERE id = :id")
-    suspend fun markCompleted(id: Long, filePath: String, fileSize: Long, completedAt: Long = System.currentTimeMillis())
+    @Query("UPDATE downloads SET status = 'completed', progress = 100, outputUri = :outputUri, mimeType = :mimeType, fileSize = :fileSize, completedAt = :completedAt WHERE id = :id AND status IN ('pending', 'downloading')")
+    suspend fun markCompleted(
+        id: Long,
+        outputUri: String,
+        mimeType: String,
+        fileSize: Long,
+        completedAt: Long = System.currentTimeMillis(),
+    ): Int
+
+    @Query("UPDATE downloads SET status = 'pending', retryCount = retryCount + 1, errorMessage = :error, errorCode = :errorCode WHERE id = :id AND status IN ('pending', 'downloading')")
+    suspend fun markRetryPending(id: Long, error: String, errorCode: String): Int
+
+    @Query("UPDATE downloads SET status = 'pending', progress = 0, retryCount = 0, errorMessage = '', errorCode = '' WHERE id = :id")
+    suspend fun resetForRetry(id: Long)
+
+    @Query("UPDATE downloads SET status = 'cancelled', errorMessage = 'Cancelled', errorCode = :errorCode WHERE id = :id AND status IN ('pending', 'downloading')")
+    suspend fun markCancelled(id: Long, errorCode: String): Int
 }

@@ -7,12 +7,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -24,15 +26,27 @@ import com.mediaconverter.app.ui.theme.GradientEnd
 import com.mediaconverter.app.ui.theme.GradientMid
 import com.mediaconverter.app.ui.theme.GradientStart
 import com.mediaconverter.app.viewmodel.HomeViewModel
+import com.mediaconverter.app.viewmodel.LinkUiState
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 
 @Composable
 fun HomeScreen(
-    viewModel: HomeViewModel = viewModel(),
+    viewModel: HomeViewModel = viewModel(
+        factory = HomeViewModel.Factory(
+            LocalContext.current.applicationContext as android.app.Application,
+        ),
+    ),
+    sharedUrls: Flow<String> = emptyFlow(),
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
+
+    LaunchedEffect(sharedUrls) {
+        sharedUrls.collect(viewModel::onSharedUrl)
+    }
 
     Column(
         modifier = modifier
@@ -65,7 +79,8 @@ fun HomeScreen(
                 if (!clipText.isNullOrEmpty()) {
                     viewModel.onUrlChange(clipText)
                 }
-            }
+            },
+            enabled = !uiState.isDownloading,
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -81,6 +96,16 @@ fun HomeScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(8.dp)
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (uiState.linkState is LinkUiState.Error) {
+                    Button(onClick = viewModel::retry) {
+                        Text(stringResource(R.string.retry))
+                    }
+                }
+                TextButton(onClick = viewModel::clear) {
+                    Text(stringResource(R.string.clear))
+                }
+            }
         } else if (uiState.videoInfo != null) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -105,7 +130,7 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         // Format & Quality Selection
-        if (uiState.videoInfo != null) {
+        if (uiState.videoInfo != null && !uiState.isDownloading) {
             FormatSelector(
                 selectedFormat = uiState.selectedFormat,
                 onFormatSelected = { viewModel.onFormatChange(it) },
@@ -114,42 +139,50 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Download Status Message
-            if (uiState.downloadMessage != null) {
-                Text(
-                    text = uiState.downloadMessage!!,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (uiState.isDownloading) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
-            }
+        }
 
-            if (uiState.isDownloading) {
-                CircularProgressIndicator(modifier = Modifier.padding(16.dp))
-            } else {
-                // Download Button
-                Button(
-                    onClick = { viewModel.startDownload() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(64.dp)
-                        .background(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(GradientStart, GradientMid, GradientEnd)
-                            ),
-                            shape = RoundedCornerShape(32.dp)
+        if (uiState.downloadMessage != null) {
+            Text(
+                text = uiState.downloadMessage!!,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (uiState.isDownloading) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+        }
+
+        if (uiState.isDownloading) {
+            CircularProgressIndicator(modifier = Modifier.padding(16.dp))
+            OutlinedButton(onClick = viewModel::cancelDownload) {
+                Text("ביטול הורדה")
+            }
+        } else if (uiState.videoInfo != null) {
+            Button(
+                onClick = { viewModel.startDownload() },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(64.dp)
+                    .background(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(GradientStart, GradientMid, GradientEnd)
                         ),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = androidx.compose.ui.graphics.Color.Transparent
+                        shape = RoundedCornerShape(32.dp)
                     ),
-                    contentPadding = PaddingValues()
-                ) {
-                    Text(
-                        text = stringResource(R.string.download_button),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = androidx.compose.ui.graphics.Color.White
-                    )
-                }
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent
+                ),
+                contentPadding = PaddingValues()
+            ) {
+                Text(
+                    text = stringResource(
+                        if (uiState.downloadCompleted) {
+                            R.string.download_another_button
+                        } else {
+                            R.string.download_button
+                        },
+                    ),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = androidx.compose.ui.graphics.Color.White
+                )
             }
         }
     }
