@@ -31,3 +31,21 @@ Physical Galaxy verification remains necessary: install 1.1.3 and retry a previo
 - Independent review found no actionable correctness issue in the fix.
 - Final APK live tests passed: real YouTube MP4 and MP3 conversion plus the complete Download-button/scheduler/saved-video/Share flow (86.424 seconds).
 - The initial GitHub build failed before compilation because setup-android's default package list requested the removed `tools` package. CI now explicitly installs platform-tools, Android 36, and build-tools 36.0.0.
+
+## Follow-up code review: hosted device-test runner
+
+A fresh full-PR review found no additional application correctness issues, but
+identified a CI blocker. GitHub's hosted macOS ARM64 device jobs exited before
+any tests ran with `HV_UNSUPPORTED` / `failed to initialize HVF`. GitHub documents
+that nested virtualization is unsupported on these runners.
+
+Device CI now uses Linux/KVM and x86_64 emulators with `-PciEmulator=true`.
+Both existing native dependencies include x86_64 binaries. The flag changes only
+debug packaging: ordinary debug and every release build stay ARM64. Actual APK
+inspection verified all three cases, including release built with the CI flag.
+The automatic build/upload job continues to produce the normal ARM64 APK.
+
+This provides cross-version Android behavior and native x86_64 coverage;
+it does not replace the recorded local ARM64/device verification or establish
+Galaxy-specific resolution. Hosted results for the updated workflow must pass
+before considering the CI review blocker cleared.

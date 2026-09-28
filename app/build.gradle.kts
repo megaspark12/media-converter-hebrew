@@ -16,15 +16,23 @@ android {
         versionCode = 5
         versionName = "1.1.3"
 
-        ndk {
-            // Intentional distribution policy: ship only to 64-bit ARM devices.
-            // CI runs the native conversion stack on arm64-v8a emulators.
-            abiFilters += listOf("arm64-v8a")
-        }
     }
 
     buildTypes {
+        debug {
+            ndk {
+                // Hosted Linux CI supports x86_64 emulators. Normal debug APKs
+                // remain ARM64, including builds installed on physical phones.
+                abiFilters += if (providers.gradleProperty("ciEmulator").orNull == "true") {
+                    "x86_64"
+                } else {
+                    "arm64-v8a"
+                }
+            }
+        }
         release {
+            // Distribution stays ARM64 even when the CI debug flag is supplied.
+            ndk { abiFilters += "arm64-v8a" }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

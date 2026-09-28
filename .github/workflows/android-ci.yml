@@ -32,7 +32,9 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 
   deterministic-device-tests:
-    runs-on: macos-14
+    # Hosted Apple Silicon runners cannot provide nested virtualization.
+    # Exercise the same native dependencies' x86_64 builds on Linux/KVM.
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
@@ -43,22 +45,24 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Enable emulator acceleration
+        run: sudo chmod a+rw /dev/kvm
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api-level }}
-          arch: arm64-v8a
+          arch: x86_64
           target: google_apis
           disable-animations: true
-          script: ./gradlew connectedDebugAndroidTest
+          script: ./gradlew connectedDebugAndroidTest -PciEmulator=true
       - name: Live provider smoke test (manual opt-in)
         if: ${{ inputs.run_live && matrix.api-level == 36 }}
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 36
-          arch: arm64-v8a
+          arch: x86_64
           target: google_apis
           disable-animations: true
-          script: ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.mediaconverter.app.LiveConversionSmokeTest,com.mediaconverter.app.LiveDownloadFlowInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.runLive=true -Pandroid.testInstrumentationRunnerArguments.runLiveFlow=true
+          script: ./gradlew connectedDebugAndroidTest -PciEmulator=true -Pandroid.testInstrumentationRunnerArguments.class=com.mediaconverter.app.LiveConversionSmokeTest,com.mediaconverter.app.LiveDownloadFlowInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.runLive=true -Pandroid.testInstrumentationRunnerArguments.runLiveFlow=true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
