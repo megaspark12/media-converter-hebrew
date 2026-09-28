@@ -1,6 +1,10 @@
 package com.mediaconverter.app.data
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -88,8 +92,8 @@ class ConversionEngineTest {
                 override fun version(): String? = "test"
             },
             updateStore = object : YtDlpUpdateStore {
-                override suspend fun readLastUpdateMillis() = 0L
-                override suspend fun writeLastUpdateMillis(value: Long) = Unit
+                override suspend fun readState() = YtDlpUpdateState()
+                override suspend fun writeState(state: YtDlpUpdateState) = Unit
             },
             nowMillis = { 0L },
         )
@@ -115,6 +119,112 @@ class ConversionEngineTest {
         }.exceptionOrNull()
 
         assertTrue("Expected the original fatal error, got $thrown", thrown === fatal)
+    }
+
+    @Test
+    fun separateStreamsAreMergedBeforeConversionAndCleanedAfterPublication() = runTest {
+        val cacheRoot = Files.createTempDirectory("separate-stream-test").toFile()
+        val runtime = YtDlpRuntime(
+            client = object : YtDlpClient {
+                override suspend fun initialize() = Unit
+                override suspend fun execute(command: YtDlpCommand): YtDlpResult {
+                    val template = command.arguments[command.arguments.indexOf("-o") + 1]
+                    val directory = File(template).parentFile
+                    File(directory, "source.f137.mp4").writeText("video")
+                    File(directory, "source.f140.m4a").writeText("audio")
+                    return YtDlpResult("", "merging is handled by the application")
+                }
+                override suspend fun update() = false
+                override fun cancel(processId: String) = Unit
+                override fun version() = "test"
+            },
+            updateStore = object : YtDlpUpdateStore {
+                override suspend fun readState() = YtDlpUpdateState()
+                override suspend fun writeState(state: YtDlpUpdateState) = Unit
+            },
+        )
+        val mergedInputs = mutableListOf<String>()
+        val extractor = YtDlpMediaExtractor(runtime, MediaSourceMerger { sources, output ->
+            mergedInputs += sources.map { it.readText() }
+            output.apply { writeText("merged-video-and-audio") }
+        })
+        val engine = ConversionEngine(cacheRoot, extractor, FakeTranscoder(), FakePublisher(), FakeValidator())
+
+        val saved = engine.convert(request(OutputFormat.MP4), "fixture").getOrThrow()
+
+        assertEquals("video/mp4", saved.mimeType)
+        assertEquals(setOf("video", "audio"), mergedInputs.toSet())
+        assertTrue(cacheRoot.listFiles().orEmpty().isEmpty())
+        cacheRoot.delete()
+    }
+
+    @Test
+    fun retryWithDifferentFormatIdsDoesNotMergeAbandonedFiles() = runTest {
+        val directory = Files.createTempDirectory("retry-stream-test").toFile()
+        var attempt = 0
+        val runtime = YtDlpRuntime(
+            client = object : YtDlpClient {
+                override suspend fun initialize() = Unit
+                override suspend fun execute(command: YtDlpCommand): YtDlpResult {
+                    if (attempt++ == 0) {
+                        File(directory, "source.f137.mp4").writeText("old video")
+                        throw YtDlpException("HTTP Error 403: Forbidden")
+                    }
+                    File(directory, "source.f248.webm").writeText("new video")
+                    File(directory, "source.f251.webm").writeText("new audio")
+                    return YtDlpResult("", "")
+                }
+                override suspend fun update() = true
+                override fun cancel(processId: String) = Unit
+                override fun version() = "test"
+            },
+            updateStore = object : YtDlpUpdateStore {
+                override suspend fun readState() = YtDlpUpdateState()
+                override suspend fun writeState(state: YtDlpUpdateState) = Unit
+            },
+        )
+        val extractor = YtDlpMediaExtractor(runtime, MediaSourceMerger { sources, output ->
+            assertEquals(setOf("new video", "new audio"), sources.map { it.readText() }.toSet())
+            output.apply { writeText("merged") }
+        })
+        try {
+            assertEquals("merged", extractor.downloadSource(request(OutputFormat.MP4), directory) { _, _ -> }.readText())
+            assertEquals(2, attempt)
+            assertFalse(File(directory, "source.f137.mp4").exists())
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun cancellingNativeMergeStopsItsExecutorAndCleansWithoutPublishing() = runTest {
+        val cacheRoot = Files.createTempDirectory("cancel-merge-test").toFile()
+        val started = CompletableDeferred<Unit>()
+        var cancelled = false
+        val merger = FfmpegSourceMerger(object : FfmpegExecutor {
+            override suspend fun execute(arguments: List<String>): FfmpegExecution {
+                File(arguments.last()).writeText("partial merge")
+                started.complete(Unit)
+                awaitCancellation()
+            }
+            override fun cancel() { cancelled = true }
+        })
+        val publisher = FakePublisher()
+        val engine = ConversionEngine(cacheRoot, MediaExtractor { _, directory, _ ->
+            val sources = listOf("source.video", "source.audio").map { name ->
+                File(directory, name).apply { writeText(name) }
+            }
+            merger.merge(sources, File(directory, "merged.mkv"))
+        }, FakeTranscoder(), publisher, FakeValidator())
+        val job = async { engine.convert(request(OutputFormat.MP4), "fixture") }
+        started.await()
+        job.cancel()
+
+        assertTrue(runCatching { job.await() }.exceptionOrNull() is CancellationException)
+        assertTrue(cancelled)
+        assertEquals(null, publisher.publishedFile)
+        assertTrue(cacheRoot.listFiles().orEmpty().isEmpty())
+        cacheRoot.delete()
     }
 
     private fun request(format: OutputFormat) = ConversionRequest(

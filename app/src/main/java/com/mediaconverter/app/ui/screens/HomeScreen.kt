@@ -1,11 +1,19 @@
 package com.mediaconverter.app.ui.screens
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -20,6 +28,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mediaconverter.app.R
+import com.mediaconverter.app.data.OutputFormat
+import com.mediaconverter.app.data.db.DownloadEntity
 import com.mediaconverter.app.ui.components.FormatSelector
 import com.mediaconverter.app.ui.components.UrlInputCard
 import com.mediaconverter.app.ui.theme.GradientEnd
@@ -41,6 +51,7 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val scrollState = rememberScrollState()
 
@@ -156,34 +167,68 @@ fun HomeScreen(
                 Text("ביטול הורדה")
             }
         } else if (uiState.videoInfo != null) {
-            Button(
-                onClick = { viewModel.startDownload() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(64.dp)
-                    .background(
-                        brush = Brush.horizontalGradient(
-                            colors = listOf(GradientStart, GradientMid, GradientEnd)
-                        ),
-                        shape = RoundedCornerShape(32.dp)
-                    ),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = androidx.compose.ui.graphics.Color.Transparent
-                ),
-                contentPadding = PaddingValues()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text(
-                    text = stringResource(
-                        if (uiState.downloadCompleted) {
-                            R.string.download_another_button
-                        } else {
-                            R.string.download_button
-                        },
+                Button(
+                    onClick = { viewModel.startDownload() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(64.dp)
+                        .background(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(GradientStart, GradientMid, GradientEnd)
+                            ),
+                            shape = RoundedCornerShape(32.dp)
+                        ),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = androidx.compose.ui.graphics.Color.Transparent
                     ),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = androidx.compose.ui.graphics.Color.White
-                )
+                    contentPadding = PaddingValues()
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (uiState.downloadCompleted) {
+                                R.string.download_another_button
+                            } else {
+                                R.string.download_button
+                            },
+                        ),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = androidx.compose.ui.graphics.Color.White
+                    )
+                }
+                uiState.completedDownload?.let { download ->
+                    OutlinedButton(
+                        onClick = { shareDownload(context, download) },
+                        modifier = Modifier.height(64.dp),
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.share))
+                    }
+                }
             }
         }
+    }
+}
+
+private fun shareDownload(context: Context, download: DownloadEntity) {
+    val uri = Uri.parse(download.outputUri)
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = download.mimeType.ifBlank {
+            OutputFormat.entries.first { it.value == download.format }.mimeType
+        }
+        putExtra(Intent.EXTRA_STREAM, uri)
+        clipData = ClipData.newRawUri(download.title, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    try {
+        context.startActivity(Intent.createChooser(sendIntent, null))
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, R.string.error_share_failed, Toast.LENGTH_LONG).show()
+    } catch (_: SecurityException) {
+        Toast.makeText(context, R.string.error_share_failed, Toast.LENGTH_LONG).show()
     }
 }

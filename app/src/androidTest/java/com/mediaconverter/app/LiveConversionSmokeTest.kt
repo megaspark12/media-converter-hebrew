@@ -23,12 +23,13 @@ class LiveConversionSmokeTest {
         val arguments = InstrumentationRegistry.getArguments()
         assumeTrue(arguments.getString("runLive") == "true")
         val context = instrumentation.targetContext
-        val source = requireNotNull(MediaUrlParser.parse(YOUTUBE_DL_TEST_VIDEO))
+        val source = requireNotNull(MediaUrlParser.parse(arguments.getString("liveUrl") ?: YOUTUBE_DL_TEST_VIDEO))
+        val quality = arguments.getString("liveQuality") ?: "720"
         val engine = ConversionEngine.create(context)
 
         OutputFormat.entries.forEachIndexed { index, format ->
             val saved = engine.convert(
-                ConversionRequest(90_001L + index, source, format),
+                ConversionRequest(90_001L + index, source, format, quality),
                 "yt-dlp-live-smoke-${format.value}",
             ).getOrThrow()
             val uri = Uri.parse(saved.contentUri)
