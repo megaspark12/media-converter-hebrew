@@ -14,7 +14,10 @@ import kotlinx.coroutines.withContext
 
 private val Context.ytDlpDataStore by preferencesDataStore(name = "yt_dlp_runtime")
 
-class AndroidYtDlpClient(private val context: Context) : YtDlpClient {
+class AndroidYtDlpClient(
+    private val context: Context,
+    private val updateChannel: YoutubeDL.UpdateChannel = YoutubeDL.UpdateChannel.STABLE,
+) : YtDlpClient {
     override suspend fun initialize() = withContext(Dispatchers.IO) {
         YoutubeDL.getInstance().init(context.applicationContext)
         val installedVersion = runInterruptible {
@@ -55,8 +58,11 @@ class AndroidYtDlpClient(private val context: Context) : YtDlpClient {
             }
         }
 
-    override suspend fun update(): Boolean = withContext(Dispatchers.IO) {
-        when (YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)) {
+    override suspend fun update(): Boolean = runInterruptible(Dispatchers.IO) {
+        val status = withYtDlpUpdateMetadata(context.cacheDir, updateChannel.apiUrl) { url ->
+            YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel(url))
+        }
+        when (status) {
             YoutubeDL.UpdateStatus.DONE -> true
             YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> false
             null -> throw YtDlpException("yt-dlp update returned no status")

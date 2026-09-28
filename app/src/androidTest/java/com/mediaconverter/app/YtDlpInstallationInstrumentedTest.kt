@@ -11,11 +11,47 @@ import com.mediaconverter.app.data.YtDlpUpdateState
 import com.yausername.youtubedl_android.YoutubeDL
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class YtDlpInstallationInstrumentedTest {
+    @Test
+    fun boundedUpdateMetadataPreservesAlreadyCurrentVersion() = runBlocking {
+        withInstallationState { context, actualVersion ->
+            withReleaseFixture(context, actualVersion) { channel ->
+                val client = AndroidYtDlpClient(context, channel)
+                client.initialize()
+                assertFalse(client.update())
+                assertEquals(actualVersion, YoutubeDL.getInstance().version(context))
+            }
+        }
+    }
+
+    @Test
+    fun boundedUpdateMetadataStillInstallsTheReleaseExecutable() = runBlocking {
+        withInstallationState { context, actualVersion ->
+            withReleaseFixture(context, actualVersion) { channel ->
+                val client = AndroidYtDlpClient(context, channel)
+                client.initialize()
+                context.getSharedPreferences("youtubedl-android", Context.MODE_PRIVATE).edit()
+                    .putString("dlpVersion", "2000.01.01").commit()
+
+                assertTrue(client.update())
+                assertEquals(actualVersion, YoutubeDL.getInstance().version(context))
+                assertEquals(actualVersion, client.execute(
+                    YtDlpCommand("updated-version", "", listOf("--version")),
+                ).stdout.trim())
+            }
+        }
+    }
+
     @Test
     fun initializationRepairsRestoredVersionAndClearsTheRestoredUpdateCooldown() = runBlocking {
         withInstallationState { context, actualVersion ->
@@ -72,6 +108,31 @@ class YtDlpInstallationInstrumentedTest {
                 .putString("dlpVersionName", originalName)
                 .commit()
             store.writeState(originalState)
+        }
+    }
+
+    private suspend fun withReleaseFixture(
+        context: Context,
+        version: String,
+        block: suspend (YoutubeDL.UpdateChannel) -> Unit,
+    ) {
+        val directory = File(context.cacheDir, "update-fixture-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            // Reinstall identical bytes so this test does not replace the device's
+            // executable with a fake or require a network release.
+            val installed = File(context.noBackupFilesDir, "youtubedl-android/yt-dlp/yt-dlp")
+            val binary = installed.copyTo(File(directory, "yt-dlp"))
+            val release = File(directory, "release.json").apply {
+                writeText(JSONObject()
+                    .put("tag_name", version).put("name", "yt-dlp $version")
+                    .put("assets", JSONArray().put(JSONObject()
+                        .put("name", "yt-dlp")
+                        .put("browser_download_url", binary.toURI().toString())))
+                    .toString())
+            }
+            block(YoutubeDL.UpdateChannel(release.toURI().toString()))
+        } finally {
+            directory.deleteRecursively()
         }
     }
 }
