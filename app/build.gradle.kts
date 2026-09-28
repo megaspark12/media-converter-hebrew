@@ -13,18 +13,26 @@ android {
         applicationId = "com.mediaconverter.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 6
+        versionName = "1.1.4"
 
-        ndk {
-            // Intentional distribution policy: ship only to 64-bit ARM devices.
-            // CI runs the native conversion stack on arm64-v8a emulators.
-            abiFilters += listOf("arm64-v8a")
-        }
     }
 
     buildTypes {
+        debug {
+            ndk {
+                // Hosted Linux CI supports x86_64 emulators. Normal debug APKs
+                // remain ARM64, including builds installed on physical phones.
+                abiFilters += if (providers.gradleProperty("ciEmulator").orNull == "true") {
+                    "x86_64"
+                } else {
+                    "arm64-v8a"
+                }
+            }
+        }
         release {
+            // Distribution stays ARM64 even when the CI debug flag is supplied.
+            ndk { abiFilters += "arm64-v8a" }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -89,6 +97,7 @@ dependencies {
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.test.uiautomator)
   androidTestImplementation(libs.androidx.test.espresso.core)
+  androidTestImplementation(libs.androidx.work.testing)
 
   // Navigation
   implementation(libs.androidx.navigation3.ui)

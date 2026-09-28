@@ -9,6 +9,7 @@ data class YtDlpCommand(
     val sourceUrl: String,
     val arguments: List<String>,
     val onProgress: ((Int, String) -> Unit)? = null,
+    val beforeRetry: (() -> Unit)? = null,
 )
 
 data class YtDlpResult(
@@ -26,9 +27,14 @@ interface YtDlpClient {
     fun version(): String?
 }
 
+data class YtDlpUpdateState(
+    val lastSuccessfulCheckMillis: Long = 0L,
+    val lastFailedCheckMillis: Long = 0L,
+)
+
 interface YtDlpUpdateStore {
-    suspend fun readLastUpdateMillis(): Long
-    suspend fun writeLastUpdateMillis(value: Long)
+    suspend fun readState(): YtDlpUpdateState
+    suspend fun writeState(state: YtDlpUpdateState)
 }
 
 class YtDlpRuntime(
@@ -64,15 +70,20 @@ class YtDlpRuntime(
         ensureInitialized()
         try {
             executeCancellable(command)
-        } catch (failure: Throwable) {
-            if (failure is CancellationException || !YtDlpFailureClassifier.shouldUpdateAndRetry(failure)) {
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            if (!YtDlpFailureClassifier.shouldUpdateAndRetry(failure)) {
                 throw failure
             }
             try {
                 updateIfDue()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 // Keep the bundled executable and perform the single controlled retry.
             }
+            command.beforeRetry?.invoke()
             executeCancellable(command)
         }
     }
@@ -94,19 +105,28 @@ class YtDlpRuntime(
 
     private suspend fun updateIfDue() {
         val now = nowMillis()
-        val lastUpdate = updateStore.readLastUpdateMillis()
-        if (now - lastUpdate < UPDATE_INTERVAL_MILLIS) return
+        val state = updateStore.readState()
+        fun isRecent(timestamp: Long, interval: Long) =
+            timestamp > 0L && now >= timestamp && now - timestamp < interval
+        if (isRecent(state.lastSuccessfulCheckMillis, UPDATE_INTERVAL_MILLIS) ||
+            isRecent(state.lastFailedCheckMillis, FAILED_UPDATE_RETRY_MILLIS)
+        ) return
         try {
             client.update()
-        } finally {
-            // Throttle checks, not only successful replacements. A temporary update
-            // outage must not cause every request or app launch to hit the updater.
-            updateStore.writeLastUpdateMillis(now)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            updateStore.writeState(state.copy(lastFailedCheckMillis = nowMillis()))
+            throw failure
         }
+        // An up-to-date response is also a successful check. An outage has a
+        // shorter, persistent cooldown so a restored connection can recover.
+        updateStore.writeState(YtDlpUpdateState(lastSuccessfulCheckMillis = nowMillis()))
     }
 
     companion object {
         const val UPDATE_INTERVAL_MILLIS = 24L * 60L * 60L * 1_000L
+        const val FAILED_UPDATE_RETRY_MILLIS = 5L * 60L * 1_000L
     }
 }
 

@@ -33,6 +33,10 @@ interface MediaTranscoder {
     fun cancel()
 }
 
+fun interface MediaSourceMerger {
+    suspend fun merge(sources: List<File>, output: File): File
+}
+
 interface MediaPublisher {
     suspend fun publish(source: File, displayName: String, format: OutputFormat): SavedMedia
 }
@@ -50,41 +54,13 @@ interface MediaValidator {
 }
 
 object YtDlpDownloadCommandFactory {
-    fun create(request: ConversionRequest, outputTemplate: String): List<String> =
-        createForClient(
-            request,
-            outputTemplate,
-            youtubeClient = if (request.source.platform == SupportedPlatform.YOUTUBE) {
-                "web_embedded"
-            } else {
-                null
-            },
-        )
-
-    fun createAttempts(request: ConversionRequest, outputTemplate: String): List<List<String>> =
-        if (request.source.platform == SupportedPlatform.YOUTUBE) {
-            listOf("web_embedded", "android_vr").map { client ->
-                createForClient(request, outputTemplate, youtubeClient = client)
-            }
-        } else {
-            listOf(createForClient(request, outputTemplate, youtubeClient = null))
-        }
-
-    private fun createForClient(
-        request: ConversionRequest,
-        outputTemplate: String,
-        youtubeClient: String?,
-    ): List<String> {
+    fun create(request: ConversionRequest, outputTemplate: String): List<String> {
         val formatSelector = when (request.outputFormat) {
             OutputFormat.MP3 -> "bestaudio/best"
             OutputFormat.MP4 -> {
-                val height = request.quality.toIntOrNull()
-                if (height == null) {
-                    "best[ext=mp4][vcodec!=none][acodec!=none]/best[vcodec!=none][acodec!=none]/best"
-                } else {
-                    "best[height<=$height][ext=mp4][vcodec!=none][acodec!=none]/" +
-                        "best[height<=$height][vcodec!=none][acodec!=none]/best"
-                }
+                val height = request.quality.toIntOrNull()?.takeIf { it > 0 }
+                val limit = height?.let { "[height<=$it]" }.orEmpty()
+                "bestvideo$limit+bestaudio/best$limit"
             }
         }
         val common = listOf(
@@ -92,23 +68,27 @@ object YtDlpDownloadCommandFactory {
             "--socket-timeout", "20",
             "--retries", "3",
             "--fragment-retries", "3",
+            "--abort-on-unavailable-fragments",
             "--no-part",
             "--force-overwrites",
             "-f", formatSelector,
             "-o", outputTemplate,
         )
-        return if (youtubeClient != null) {
-            listOf(
-                "--extractor-args",
-                "youtube:player_client=$youtubeClient",
-            ) + common
+        // Follow yt-dlp's maintained client defaults, just like metadata requests.
+        // MKV accepts the source codecs; the existing transcoder produces MP4.
+        // If yt-dlp has no CLI merger, its separate files are merged by FFmpegKit.
+        return if (request.outputFormat == OutputFormat.MP4) {
+            common + listOf("--merge-output-format", "mkv")
         } else {
             common
         }
     }
 }
 
-class YtDlpMediaExtractor(private val runtime: YtDlpRuntime) : MediaExtractor {
+class YtDlpMediaExtractor(
+    private val runtime: YtDlpRuntime,
+    private val merger: MediaSourceMerger = FfmpegSourceMerger(FfmpegKitExecutor()),
+) : MediaExtractor {
     override suspend fun downloadSource(
         request: ConversionRequest,
         tempDirectory: File,
@@ -116,49 +96,49 @@ class YtDlpMediaExtractor(private val runtime: YtDlpRuntime) : MediaExtractor {
     ): File {
         check(tempDirectory.exists() || tempDirectory.mkdirs()) { "Unable to create temporary directory" }
         val template = File(tempDirectory, "source.%(ext)s").absolutePath
-        var finalFailure: ConversionException? = null
-        for (arguments in YtDlpDownloadCommandFactory.createAttempts(request, template)) {
-            tempDirectory.listFiles().orEmpty()
-                .filter { it.name.startsWith("source.") }
-                .forEach(File::delete)
-            try {
-                runtime.execute(
-                    YtDlpCommand(
-                        processId = "download-${request.downloadId}-${UUID.randomUUID()}",
-                        sourceUrl = request.source.value,
-                        arguments = arguments,
-                        onProgress = onProgress,
-                    ),
-                )
-                finalFailure = null
-                break
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                val mapped = ConversionFailureMapper.fromThrowable(failure)
-                finalFailure = ConversionException(
-                    mapped,
-                    failure.message ?: "yt-dlp download failed",
-                    failure,
-                )
-                if (mapped != ConversionFailure.PROVIDER_CHANGED &&
-                    mapped != ConversionFailure.NO_COMPATIBLE_FORMAT
-                ) {
-                    throw finalFailure
-                }
-            }
+        try {
+            runtime.execute(
+                YtDlpCommand(
+                    processId = "download-${request.downloadId}-${UUID.randomUUID()}",
+                    sourceUrl = request.source.value,
+                    arguments = YtDlpDownloadCommandFactory.create(request, template),
+                    onProgress = onProgress,
+                    beforeRetry = {
+                        // Updating the extractor can select different format IDs.
+                        // Discard this attempt's files before downloading replacements.
+                        tempDirectory.listFiles().orEmpty()
+                            .filter { it.name.startsWith("source.") }
+                            .forEach { file ->
+                                check(file.delete()) { "Unable to remove incomplete download" }
+                            }
+                    },
+                ),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            throw ConversionException(
+                ConversionFailureMapper.fromThrowable(failure),
+                failure.message ?: "yt-dlp download failed",
+                failure,
+            )
         }
-        finalFailure?.let { throw it }
         val outputs = tempDirectory.listFiles()
             .orEmpty()
             .filter { it.isFile && it.name.startsWith("source.") && !it.name.endsWith(".part") }
-        if (outputs.size != 1 || outputs.single().length() <= 0L) {
+        if (outputs.isEmpty() || outputs.any { it.length() <= 0L } || outputs.size > 2 ||
+            (outputs.size == 2 && request.outputFormat != OutputFormat.MP4)
+        ) {
             throw ConversionException(
                 ConversionFailure.DOWNLOAD_FAILED,
-                "yt-dlp did not produce exactly one complete source file",
+                "yt-dlp did not produce complete media sources",
             )
         }
-        return outputs.single()
+        return if (outputs.size == 1) {
+            outputs.single()
+        } else {
+            merger.merge(outputs.sortedBy { it.name }, File(tempDirectory, "merged-source.mkv"))
+        }
     }
 }
 
@@ -167,6 +147,32 @@ data class FfmpegExecution(val succeeded: Boolean, val output: String)
 interface FfmpegExecutor {
     suspend fun execute(arguments: List<String>): FfmpegExecution
     fun cancel()
+}
+
+class FfmpegSourceMerger(private val executor: FfmpegExecutor) : MediaSourceMerger {
+    override suspend fun merge(sources: List<File>, output: File): File {
+        require(sources.size == 2) { "Expected a video source and an audio source" }
+        // Track mapping is independent of filename/format-id order. yt-dlp's
+        // bestvideo+bestaudio selection supplies one video-only and one audio-only file.
+        val arguments = listOf("-y") + sources.flatMap { listOf("-i", it.absolutePath) } + listOf(
+            "-map", "0:v:0?", "-map", "1:v:0?",
+            "-map", "0:a:0?", "-map", "1:a:0?",
+            "-c", "copy", output.absolutePath,
+        )
+        val result = try {
+            executor.execute(arguments)
+        } catch (cancelled: CancellationException) {
+            executor.cancel()
+            throw cancelled
+        }
+        if (!result.succeeded || !output.isFile || output.length() <= 0L) {
+            throw ConversionException(
+                ConversionFailure.PROCESSING_FAILED,
+                "Unable to merge video and audio: ${result.output.takeLast(2_000)}",
+            )
+        }
+        return output
+    }
 }
 
 class FfmpegKitExecutor : FfmpegExecutor {
