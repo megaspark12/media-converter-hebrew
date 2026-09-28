@@ -68,6 +68,7 @@ object YtDlpDownloadCommandFactory {
             "--socket-timeout", "20",
             "--retries", "3",
             "--fragment-retries", "3",
+            "--abort-on-unavailable-fragments",
             "--no-part",
             "--force-overwrites",
             "-f", formatSelector,

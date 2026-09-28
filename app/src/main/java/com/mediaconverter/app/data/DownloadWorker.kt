@@ -17,9 +17,9 @@ class DownloadWorker(
     private val repository = DownloadRepository(context)
 
     override suspend fun doWork(): Result {
+        val downloadId = inputData.getLong(KEY_DOWNLOAD_ID, -1L)
+        if (downloadId <= 0) return Result.failure()
         return try {
-            val downloadId = inputData.getLong(KEY_DOWNLOAD_ID, -1L)
-            if (downloadId <= 0) return Result.failure()
             notifications.createChannel()
             setForeground(notifications.foreground(downloadId, "מוריד מדיה", 0, ""))
             val outcome = runner.run(downloadId) { progress, eta ->
@@ -46,7 +46,6 @@ class DownloadWorker(
                 }
             }
         } catch (cancelled: CancellationException) {
-            val downloadId = inputData.getLong(KEY_DOWNLOAD_ID, -1L)
             if (downloadId > 0) {
                 notifications.cancel(downloadId)
                 withContext(NonCancellable + Dispatchers.IO) {
@@ -58,6 +57,22 @@ class DownloadWorker(
                 }
             }
             throw cancelled
+        } catch (failure: Exception) {
+            // Failures before runner.run (notably foreground-service rejection)
+            // otherwise fail only WorkManager's row and leave our UI pending.
+            withContext(NonCancellable + Dispatchers.IO) {
+                repository.markFailed(
+                    downloadId,
+                    failure.message ?: "Unable to run download",
+                    ConversionFailureMapper.fromThrowable(failure).code,
+                )
+            }
+            try {
+                notifications.cancel(downloadId)
+            } catch (_: Exception) {
+                // Notification failure must not hide the persisted failure state.
+            }
+            Result.failure()
         }
     }
 

@@ -8,11 +8,14 @@ import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
 import com.mediaconverter.app.data.AndroidMediaValidator
 import com.mediaconverter.app.data.AndroidYtDlpClient
+import com.mediaconverter.app.data.ConversionEngine
 import com.mediaconverter.app.data.ConversionRequest
 import com.mediaconverter.app.data.FfmpegKitExecutor
 import com.mediaconverter.app.data.FfmpegMediaTranscoder
 import com.mediaconverter.app.data.NormalizedMediaUrl
 import com.mediaconverter.app.data.OutputFormat
+import com.mediaconverter.app.data.MediaPublisher
+import com.mediaconverter.app.data.SavedMedia
 import com.mediaconverter.app.data.SupportedPlatform
 import com.mediaconverter.app.data.YtDlpClient
 import com.mediaconverter.app.data.YtDlpCommand
@@ -42,6 +45,72 @@ import kotlin.concurrent.thread
 /** Uses local HTTP media and real yt-dlp/FFmpeg, without depending on a provider or updates. */
 @RunWith(AndroidJUnit4::class)
 class YtDlpDownloadInstrumentedTest {
+    @Test
+    fun missingHlsFragmentFailsWithoutPublishingATruncatedVideo() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        val directory = File(context.cacheDir, "missing-fragment-${UUID.randomUUID()}").apply { mkdirs() }
+        try {
+            for (name in listOf("playlist0.ts", "playlist2.ts")) {
+                instrumentation.context.assets.open("missing-fragment/$name").use { input ->
+                    File(directory, name).outputStream().use { input.copyTo(it) }
+                }
+            }
+            val playlist = File(directory, "playlist.m3u8").apply {
+                writeText("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n" +
+                    "#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\nplaylist0.ts\n" +
+                    "#EXTINF:2.0,\nplaylist1.ts\n#EXTINF:2.0,\nplaylist2.ts\n#EXT-X-ENDLIST\n")
+            }
+            FixtureServer(directory).use { server ->
+                val info = File(directory, "info.json").apply {
+                    writeText(JSONObject().put("id", "missing-fragment").put("title", "HLS fixture")
+                        .put("extractor", "fixture").put("webpage_url", "https://example.invalid/fixture")
+                        .put("formats", JSONArray().put(JSONObject()
+                            .put("format_id", "hls").put("url", server.url(playlist))
+                            .put("protocol", "m3u8_native").put("ext", "mp4")
+                            .put("vcodec", "h264").put("acodec", "aac").put("height", 48)))
+                        .toString())
+                }
+                val client = AndroidYtDlpClient(context)
+                val runtime = YtDlpRuntime(object : YtDlpClient by client {
+                    override suspend fun execute(command: YtDlpCommand): YtDlpResult {
+                        val response = YoutubeDL.getInstance().execute(
+                            YoutubeDLRequest(emptyList<String>()).addCommands(command.arguments)
+                                .addOption("--load-info-json", info.path),
+                        )
+                        return YtDlpResult(response.out, response.err)
+                    }
+                    override suspend fun update() = false
+                }, object : YtDlpUpdateStore {
+                    override suspend fun readState() = YtDlpUpdateState()
+                    override suspend fun writeState(state: YtDlpUpdateState) = Unit
+                })
+                var published = false
+                val validator = AndroidMediaValidator()
+                val engine = ConversionEngine(directory, YtDlpMediaExtractor(runtime),
+                    FfmpegMediaTranscoder(FfmpegKitExecutor(), validator),
+                    object : MediaPublisher {
+                        override suspend fun publish(source: File, displayName: String, format: OutputFormat): SavedMedia {
+                            published = true
+                            return SavedMedia("content://fixture/output", displayName, format.mimeType, source.length(), 6_000)
+                        }
+                    }, validator)
+                val result = engine.convert(ConversionRequest(123,
+                    NormalizedMediaUrl("https://youtu.be/fixture", SupportedPlatform.YOUTUBE), OutputFormat.MP4), "fixture")
+
+                assertTrue("The missing middle segment must actually be requested", server.requests.contains("playlist1.ts"))
+                assertTrue("A video with a missing segment must fail", result.isFailure)
+                val failureMessage = result.exceptionOrNull()?.message.orEmpty()
+                assertTrue("Must fail on the missing fragment, not an unrelated conversion error: $failureMessage",
+                    failureMessage.contains("fragment 2 not found, unable to continue"))
+                assertTrue("Truncated video must not reach publication", !published)
+                assertTrue(directory.listFiles().orEmpty().none { it.name.startsWith("conversion-") })
+            }
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     @Test
     fun adaptiveOnlyFormatsMergeWithAudioAndRespectTheHeightLimit() = runBlocking {
         downloadFixture(adaptive = true)
@@ -163,7 +232,8 @@ private class FixtureServer(private val directory: File) : Closeable {
                     while (!reader.readLine().isNullOrEmpty()) { /* drain headers */ }
                     val name = request.split(' ').getOrNull(1).orEmpty().removePrefix("/")
                     val file = File(directory, name)
-                    val found = name in setOf("low.mp4", "high.mp4", "audio.m4a", "low.webm", "high.webm", "audio.webm") && file.isFile
+                    val found = name in setOf("low.mp4", "high.mp4", "audio.m4a", "low.webm", "high.webm", "audio.webm",
+                        "playlist.m3u8", "playlist0.ts", "playlist1.ts", "playlist2.ts") && file.isFile
                     val body = if (found) file.readBytes() else ByteArray(0)
                     requests += name
                     val response = "HTTP/1.1 ${if (found) "200 OK" else "404 Not Found"}\r\n" +

@@ -252,11 +252,19 @@ class HomeViewModel(
     fun cancelDownload() {
         val command = downloadCommand ?: return
         val downloadId = _uiState.value.activeDownloadId ?: return
+        val cancelSessionId = uiSessionId
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(downloadMessage = "מבטל את ההורדה…")
+            fun isCurrentDownload() = cancelSessionId == uiSessionId &&
+                _uiState.value.activeDownloadId == downloadId
+            if (isCurrentDownload()) {
+                _uiState.value = _uiState.value.copy(downloadMessage = "מבטל את ההורדה…")
+            }
             runCatching { command.cancel(downloadId) }
                 .onFailure {
-                    _uiState.value = _uiState.value.copy(downloadMessage = "לא ניתן לבטל את ההורדה")
+                    if (it is CancellationException) throw it
+                    if (isCurrentDownload()) {
+                        _uiState.value = _uiState.value.copy(downloadMessage = "לא ניתן לבטל את ההורדה")
+                    }
                 }
         }
     }
