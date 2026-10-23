@@ -283,7 +283,7 @@ class MediaStorePublisher(
                     throw ConversionException(ConversionFailure.PROCESSING_FAILED, "Output validation failed")
                 }
                 val inspection = validator.inspect(source)
-                val safeName = sanitizeDisplayName(displayName, format)
+                val safeName = sanitizeMediaDisplayName(displayName, format)
                 val resolver = context.contentResolver
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
@@ -335,7 +335,15 @@ class MediaStorePublisher(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                 "MediaConverter",
             )
-            check(directory.exists() || directory.mkdirs()) { "Unable to create Downloads directory" }
+            if (!directory.exists() && !directory.mkdirs()) {
+                // Android 8-9: the public Downloads folder needs WRITE_EXTERNAL_STORAGE. A denied
+                // permission is not transient, so report it as a storage problem instead of a
+                // generic download failure that would be retried (and re-downloaded) three times.
+                throw ConversionException(
+                    ConversionFailure.STORAGE_FULL,
+                    "Unable to create Downloads directory (storage permission denied or storage unavailable)",
+                )
+            }
             val destination = uniqueLegacyDestination(directory, safeName, format)
             val pending = File(directory, ".${destination.name}.${UUID.randomUUID()}.pending")
             var uri: android.net.Uri? = null
@@ -408,15 +416,49 @@ class MediaStorePublisher(
             .first { !it.exists() }
     }
 
-    private fun sanitizeDisplayName(displayName: String, format: OutputFormat): String {
-        val withoutExtension = displayName.substringBeforeLast('.', displayName)
-        val safe = withoutExtension
-            .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
-            .trim()
-            .take(120)
-            .ifBlank { "media" }
-        return "$safe.${format.extension}"
+}
+
+/**
+ * Upper bound on the UTF-8 size of a published file name. Linux file systems reject names longer
+ * than 255 bytes and MediaStore may append " (n)" to de-duplicate, so stay comfortably below that.
+ * Hebrew is two bytes per character and emoji four, so a character count alone is not enough.
+ */
+internal const val MAX_DISPLAY_NAME_BYTES = 240
+
+internal fun sanitizeMediaDisplayName(displayName: String, format: OutputFormat): String {
+    val suffix = ".${format.extension}"
+    // Only strip the extension we are about to add back. Titles routinely contain periods
+    // ("Mr. Bean", "v1.0"), so cutting at the last period would drop most of the name.
+    val stem = if (displayName.endsWith(suffix, ignoreCase = true)) {
+        displayName.dropLast(suffix.length)
+    } else {
+        displayName
     }
+    val safe = stem
+        .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
+        .trim()
+        .ifBlank { "media" }
+    return truncateToUtf8Bytes(safe, MAX_DISPLAY_NAME_BYTES - suffix.length).trimEnd() + suffix
+}
+
+private fun truncateToUtf8Bytes(value: String, maxBytes: Int): String {
+    val builder = StringBuilder()
+    var bytes = 0
+    var index = 0
+    while (index < value.length) {
+        val codePoint = value.codePointAt(index)
+        val size = when {
+            codePoint < 0x80 -> 1
+            codePoint < 0x800 -> 2
+            codePoint < 0x10000 -> 3
+            else -> 4
+        }
+        if (bytes + size > maxBytes) break
+        bytes += size
+        builder.appendCodePoint(codePoint)
+        index += Character.charCount(codePoint)
+    }
+    return builder.toString()
 }
 
 class ConversionEngine(

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
@@ -43,15 +44,22 @@ class DownloadNotifications(private val context: Context) {
         }
     }
 
-    fun showComplete(downloadId: Long) {
-        manager.notify(
-            notificationId(downloadId),
-            NotificationCompat.Builder(context, CHANNEL_ID)
-                .setContentTitle("ההורדה הושלמה")
-                .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setAutoCancel(true)
-                .build(),
-        )
+    /** Posts the in-progress notification directly when the worker could not become a foreground service. */
+    fun notifyOngoing(downloadId: Long, title: String, progress: Int, eta: String) {
+        manager.notify(notificationId(downloadId), ongoing(downloadId, title, progress, eta))
+    }
+
+    fun showComplete(downloadId: Long, savedMedia: SavedMedia? = null) {
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle("ההורדה הושלמה")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setAutoCancel(true)
+        if (savedMedia != null) {
+            builder
+                .setContentText(savedMedia.displayName)
+                .setContentIntent(openIntent(downloadId, savedMedia))
+        }
+        manager.notify(notificationId(downloadId), builder.build())
     }
 
     fun showFailed(downloadId: Long) {
@@ -67,6 +75,18 @@ class DownloadNotifications(private val context: Context) {
 
     fun cancel(downloadId: Long) {
         manager.cancel(notificationId(downloadId))
+    }
+
+    private fun openIntent(downloadId: Long, savedMedia: SavedMedia): PendingIntent {
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(Uri.parse(savedMedia.contentUri), savedMedia.mimeType)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        return PendingIntent.getActivity(
+            context,
+            notificationId(downloadId),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     private fun cancelIntent(downloadId: Long): PendingIntent {

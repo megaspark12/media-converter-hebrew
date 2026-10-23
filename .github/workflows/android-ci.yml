@@ -13,7 +13,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - name: Unit tests, lint, and debug APK
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest
       - name: Verify 16 KB APK alignment

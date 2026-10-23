@@ -10,7 +10,11 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-data class DownloadTaskResult(val succeeded: Boolean, val shouldRetry: Boolean)
+data class DownloadTaskResult(
+    val succeeded: Boolean,
+    val shouldRetry: Boolean,
+    val savedMedia: SavedMedia? = null,
+)
 
 internal interface DownloadTaskStore {
     suspend fun getDownloadById(id: Long): com.mediaconverter.app.data.db.DownloadEntity?
@@ -88,7 +92,7 @@ class DownloadTaskRunner internal constructor(
                 },
             )
             logTerminal(downloadId, record.platform, record.ytDlpVersion, startedAt, "success")
-            DownloadTaskResult(true, false)
+            DownloadTaskResult(succeeded = true, shouldRetry = false, savedMedia = saved)
         } catch (cancelled: CancellationException) {
             logTerminal(downloadId, record.platform, record.ytDlpVersion, startedAt, ConversionFailure.CANCELLED.code)
             throw cancelled
