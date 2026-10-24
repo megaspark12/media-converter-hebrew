@@ -70,7 +70,10 @@ class YtDlpRuntime(
                 throw failure
             }
             try {
-                gate.exclusive { updateIfDue() }
+                // The exclusive slot waits for every running download. Only ask for it when the
+                // throttle says an update can actually happen; otherwise a routine 403 during a
+                // download would park this lookup (and hold back all new ones) for nothing.
+                if (isUpdateDue()) gate.exclusive { updateIfDue() }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -101,11 +104,14 @@ class YtDlpRuntime(
         initialized = true
     }
 
+    private suspend fun isUpdateDue(): Boolean =
+        nowMillis() - updateStore.readLastUpdateMillis() >= UPDATE_INTERVAL_MILLIS
+
     /** Must be called while holding the exclusive gate: no process may run while the binary is replaced. */
     private suspend fun updateIfDue() {
+        // Re-checked under the gate: another caller may have updated while we waited for it.
+        if (!isUpdateDue()) return
         val now = nowMillis()
-        val lastUpdate = updateStore.readLastUpdateMillis()
-        if (now - lastUpdate < UPDATE_INTERVAL_MILLIS) return
         try {
             client.update()
         } finally {

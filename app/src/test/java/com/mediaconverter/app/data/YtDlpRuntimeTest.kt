@@ -128,6 +128,61 @@ class YtDlpRuntimeTest {
     }
 
     @Test
+    fun providerFailureRetryDoesNotWaitForDownloadWhenNoUpdateIsDue() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val client = FakeYtDlpClient(
+            started = started,
+            delays = mapOf("download-1" to 10_000L),
+            outcomes = ArrayDeque(
+                listOf(
+                    Result.success(YtDlpResult("download", "")),
+                    Result.failure(YtDlpException("HTTP Error 403: Forbidden")),
+                    Result.success(YtDlpResult("{\"title\":\"ok\"}", "")),
+                ),
+            ),
+        )
+        // Last update check was moments ago, so the throttle forbids another one.
+        val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 10L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+
+        val info = async { runtime.metadata(youtubeUrl("retry"), "meta") }
+        advanceTimeBy(1_000)
+
+        assertTrue("retry must not queue behind the download when no update can happen", info.isCompleted)
+        assertTrue(download.isActive)
+        assertEquals("{\"title\":\"ok\"}", info.await().stdout)
+        assertEquals(listOf("download-1", "meta", "meta"), client.commands.map { it.processId })
+        assertEquals(0, client.updateCount)
+        download.await()
+    }
+
+    @Test
+    fun cancellationWhileHeldBackByPendingUpdateNeverStartsAProcess() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val client = FakeYtDlpClient(started = started, delays = mapOf("download-1" to 10_000L))
+        val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 90_000_000L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+        val refresh = async { runtime.refreshIfDue() }
+        runCurrent()
+        val info = async { runtime.metadata(youtubeUrl("held"), "meta") }
+        advanceTimeBy(1_000)
+        assertEquals(listOf("download-1"), client.commands.map { it.processId })
+
+        info.cancel()
+        download.await()
+        refresh.await()
+
+        assertTrue(info.isCancelled)
+        assertEquals(listOf("download-1"), client.commands.map { it.processId })
+        assertTrue("no process was started, so none may be cancelled", client.cancelledProcessIds.isEmpty())
+        assertEquals(1, client.updateCount)
+        // The gate must be usable afterwards: a cancelled waiter may not leave a permit behind.
+        assertEquals("{\"title\":\"ok\"}", runtime.metadata(youtubeUrl("after"), "after").stdout)
+    }
+
+    @Test
     fun cancellationWhileWaitingForUpdateSlotDoesNotRetry() = runTest {
         val started = CompletableDeferred<Unit>()
         val client = FakeYtDlpClient(
@@ -153,6 +208,9 @@ class YtDlpRuntimeTest {
         assertTrue(info.isCancelled)
         assertEquals(listOf("download-1", "meta"), client.commands.map { it.processId })
         assertEquals(0, client.updateCount)
+        // A cancelled exclusive waiter must release its hold on the gate, or no lookup ever runs again.
+        assertEquals("{\"title\":\"ok\"}", runtime.metadata(youtubeUrl("after"), "after").stdout)
+        assertEquals(listOf("download-1", "meta", "after"), client.commands.map { it.processId })
     }
 
     @Test
