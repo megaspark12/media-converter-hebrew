@@ -101,7 +101,8 @@ class YtDlpMediaExtractor(
                 YtDlpCommand(
                     processId = "download-${request.downloadId}-${UUID.randomUUID()}",
                     sourceUrl = request.source.value,
-                    arguments = YtDlpDownloadCommandFactory.create(request, template),
+                    arguments = YtDlpDownloadCommandFactory.create(request, template) +
+                        ffmpegLocationOverride(tempDirectory),
                     onProgress = onProgress,
                     beforeRetry = {
                         // Updating the extractor can select different format IDs.
@@ -141,6 +142,18 @@ class YtDlpMediaExtractor(
         }
     }
 }
+
+/**
+ * youtubedl-android passes `--ffmpeg-location <nativeLibraryDir>/libffmpeg.so` on every run, but
+ * this app ships no yt-dlp ffmpeg module: merging is FFmpegKit's job. When that path does not
+ * exist, yt-dlp falls back to probing the device's PATH, and on some images (API 26/29 x86_64
+ * emulators) that leaves its merger "available" with no executable, which crashes or stalls the
+ * download. Pointing the option at an existing directory that contains no ffmpeg makes yt-dlp
+ * take the deterministic "ffmpeg not found, keep the separate files" path everywhere. Later
+ * options win in yt-dlp, and ours follow the library's.
+ */
+internal fun ffmpegLocationOverride(directory: File): List<String> =
+    listOf("--ffmpeg-location", directory.absolutePath)
 
 data class FfmpegExecution(val succeeded: Boolean, val output: String)
 

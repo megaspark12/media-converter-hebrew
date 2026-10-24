@@ -31,7 +31,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import org.junit.runner.RunWith
 import java.io.Closeable
 import java.io.File
@@ -45,6 +47,11 @@ import kotlin.concurrent.thread
 /** Uses local HTTP media and real yt-dlp/FFmpeg, without depending on a provider or updates. */
 @RunWith(AndroidJUnit4::class)
 class YtDlpDownloadInstrumentedTest {
+    // These tests run the real yt-dlp process and FFmpeg; a stall must fail with a stack trace
+    // instead of holding the CI leg until the job timeout.
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(240)
+
     @Test
     fun missingHlsFragmentFailsWithoutPublishingATruncatedVideo() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()

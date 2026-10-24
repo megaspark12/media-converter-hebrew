@@ -108,6 +108,41 @@ class ConversionEngineTest {
     }
 
     @Test
+    fun ytDlpExtractorPointsFfmpegLocationAtTheRequestDirectory() = runTest {
+        val directory = Files.createTempDirectory("extractor-ffmpeg-location-test").toFile()
+        val executed = mutableListOf<YtDlpCommand>()
+        val runtime = YtDlpRuntime(
+            client = object : YtDlpClient {
+                override suspend fun initialize() = Unit
+                override suspend fun execute(command: YtDlpCommand): YtDlpResult {
+                    executed += command
+                    File(directory, "source.mp4").writeText("video+audio")
+                    return YtDlpResult("", "")
+                }
+                override suspend fun update() = true
+                override fun cancel(processId: String) = Unit
+                override fun version() = "test"
+            },
+            updateStore = object : YtDlpUpdateStore {
+                override suspend fun readState() = YtDlpUpdateState()
+                override suspend fun writeState(state: YtDlpUpdateState) = Unit
+            },
+        )
+
+        try {
+            YtDlpMediaExtractor(runtime).downloadSource(request(OutputFormat.MP4), directory) { _, _ -> }
+
+            // The wrapper library injects its own --ffmpeg-location first; ours must follow it
+            // and name an existing directory without ffmpeg so yt-dlp never tries to merge.
+            val arguments = executed.single().arguments
+            assertEquals(directory.absolutePath, arguments[arguments.lastIndexOf("--ffmpeg-location") + 1])
+            assertTrue(directory.isDirectory)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun mediaValidatorDoesNotConvertFatalInspectionErrorsToInvalidMedia() {
         val fatal = OutOfMemoryError("inspection fatal")
         val validator = object : AndroidMediaValidator() {
