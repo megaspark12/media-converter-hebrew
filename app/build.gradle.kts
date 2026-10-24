@@ -27,9 +27,9 @@ android {
     buildTypes {
         debug {
             ndk {
-                // GitHub-hosted runners cannot boot arm64 emulators (Apple-silicon macOS
-                // runners expose no Hypervisor.framework), so CI runs x86_64 emulators on
-                // Linux with KVM. Both native dependencies ship x86_64 libs; ffmpeg-kit-full
+                // GitHub-hosted runners cannot boot arm64 emulators (the Apple-silicon macOS
+                // runners are VMs without nested virtualization), so CI runs x86_64 emulators
+                // on Linux with KVM. Both native dependencies ship x86_64 libs; ffmpeg-kit-full
                 // 8.1.7 ships no armeabi-v7a or x86, so this is the only extra ABI possible.
                 // Build-type filters are unioned with defaultConfig: debug APKs carry
                 // arm64-v8a + x86_64, release APKs are unaffected.

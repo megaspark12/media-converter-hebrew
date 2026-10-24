@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.text.SpannableString
+import androidx.core.content.ContextCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -44,6 +45,14 @@ class ShareAndSchedulerInstrumentedTest {
                     "pm grant $packageName ${Manifest.permission.WRITE_EXTERNAL_STORAGE}",
                 ),
             ).use { it.readBytes() }
+            assertEquals(
+                "pm grant WRITE_EXTERNAL_STORAGE did not take effect on API ${Build.VERSION.SDK_INT}",
+                PackageManager.PERMISSION_GRANTED,
+                ContextCompat.checkSelfPermission(
+                    instrumentation.targetContext,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                ),
+            )
         }
     }
 
