@@ -31,7 +31,7 @@ class DownloadWorker(
                     if (foreground) {
                         setForegroundAsync(notifications.foreground(downloadId, TITLE, progress, eta))
                     } else {
-                        notifications.notifyOngoing(downloadId, TITLE, progress, eta)
+                        notifications.notifyProgress(downloadId, TITLE, progress, eta)
                     }
                 }
             }

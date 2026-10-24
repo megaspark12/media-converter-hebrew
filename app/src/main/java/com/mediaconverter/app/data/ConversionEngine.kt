@@ -345,7 +345,9 @@ class MediaStorePublisher(
                 )
             }
             val destination = uniqueLegacyDestination(directory, safeName, format)
-            val pending = File(directory, ".${destination.name}.${UUID.randomUUID()}.pending")
+            // Fixed-length temporary name. Embedding the destination name here could push the
+            // temp file past the 255-byte file-name limit even though the destination fits.
+            val pending = File(directory, ".${UUID.randomUUID()}.pending")
             var uri: android.net.Uri? = null
             try {
                 val copyContext = currentCoroutineContext()
@@ -422,6 +424,8 @@ class MediaStorePublisher(
  * Upper bound on the UTF-8 size of a published file name. Linux file systems reject names longer
  * than 255 bytes and MediaStore may append " (n)" to de-duplicate, so stay comfortably below that.
  * Hebrew is two bytes per character and emoji four, so a character count alone is not enough.
+ * Nothing else may be appended to this name on disk: the legacy publish path writes through a
+ * temporary file with its own fixed-length name for exactly that reason.
  */
 internal const val MAX_DISPLAY_NAME_BYTES = 240
 
@@ -436,6 +440,9 @@ internal fun sanitizeMediaDisplayName(displayName: String, format: OutputFormat)
     }
     val safe = stem
         .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_")
+        .trim()
+        // A leading period would make the file hidden in file managers and media scanners.
+        .trimStart('.')
         .trim()
         .ifBlank { "media" }
     return truncateToUtf8Bytes(safe, MAX_DISPLAY_NAME_BYTES - suffix.length).trimEnd() + suffix

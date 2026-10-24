@@ -26,14 +26,17 @@ class DownloadNotifications(private val context: Context) {
     }
 
     fun ongoing(downloadId: Long, title: String, progress: Int, eta: String): Notification =
+        progress(downloadId, title, progress, eta)
+            .setOngoing(true)
+            .build()
+
+    private fun progress(downloadId: Long, title: String, progress: Int, eta: String): NotificationCompat.Builder =
         NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(if (eta.isBlank()) "$progress%" else "$progress% · $eta")
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, progress, progress <= 0)
-            .setOngoing(true)
             .addAction(0, "ביטול", cancelIntent(downloadId))
-            .build()
 
     fun foreground(downloadId: Long, title: String, progress: Int, eta: String): ForegroundInfo {
         val notification = ongoing(downloadId, title, progress, eta)
@@ -44,9 +47,13 @@ class DownloadNotifications(private val context: Context) {
         }
     }
 
-    /** Posts the in-progress notification directly when the worker could not become a foreground service. */
-    fun notifyOngoing(downloadId: Long, title: String, progress: Int, eta: String) {
-        manager.notify(notificationId(downloadId), ongoing(downloadId, title, progress, eta))
+    /**
+     * Posts progress directly when the worker could not become a foreground service. Deliberately
+     * not "ongoing": with no service to take it down, a process kill mid-download would otherwise
+     * leave a notification the user cannot swipe away.
+     */
+    fun notifyProgress(downloadId: Long, title: String, progress: Int, eta: String) {
+        manager.notify(notificationId(downloadId), progress(downloadId, title, progress, eta).build())
     }
 
     fun showComplete(downloadId: Long, savedMedia: SavedMedia? = null) {

@@ -27,6 +27,12 @@ class MediaDisplayNameTest {
     }
 
     @Test
+    fun leadingPeriodsAreDroppedSoTheFileIsNotHidden() {
+        assertEquals("Baby One More Time-42.mp4", sanitizeMediaDisplayName("...Baby One More Time-42", OutputFormat.MP4))
+        assertEquals("media.mp3", sanitizeMediaDisplayName("...", OutputFormat.MP3))
+    }
+
+    @Test
     fun blankTitlesFallBackToAGenericName() {
         assertEquals("media.mp4", sanitizeMediaDisplayName("   ", OutputFormat.MP4))
         assertEquals("media.mp3", sanitizeMediaDisplayName(".mp3", OutputFormat.MP3))
