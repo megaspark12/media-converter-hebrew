@@ -1,5 +1,10 @@
 package com.mediaconverter.app.ui.screens
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +30,7 @@ import com.mediaconverter.app.ui.components.UrlInputCard
 import com.mediaconverter.app.ui.theme.GradientEnd
 import com.mediaconverter.app.ui.theme.GradientMid
 import com.mediaconverter.app.ui.theme.GradientStart
+import com.mediaconverter.app.viewmodel.CompletedMedia
 import com.mediaconverter.app.viewmodel.HomeViewModel
 import com.mediaconverter.app.viewmodel.LinkUiState
 import kotlinx.coroutines.flow.Flow
@@ -42,6 +48,7 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     val scrollState = rememberScrollState()
 
     LaunchedEffect(sharedUrls) {
@@ -51,6 +58,10 @@ fun HomeScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            // The activity draws edge-to-edge (mandatory from Android 15 with this targetSdk), so
+            // keep the content clear of the status bar, the navigation bar, display cutouts and
+            // the keyboard; otherwise the download button hides behind Samsung's 3-button bar.
+            .safeDrawingPadding()
             .verticalScroll(scrollState)
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -150,6 +161,19 @@ fun HomeScreen(
             )
         }
 
+        val completedMedia = uiState.completedMedia
+        if (uiState.downloadCompleted && completedMedia != null) {
+            OutlinedButton(
+                onClick = { openSavedMedia(context, completedMedia) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text(stringResource(R.string.open), style = MaterialTheme.typography.titleMedium)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
         if (uiState.isDownloading) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
             OutlinedButton(onClick = viewModel::cancelDownload) {
@@ -185,5 +209,16 @@ fun HomeScreen(
                 )
             }
         }
+    }
+}
+
+private fun openSavedMedia(context: Context, media: CompletedMedia) {
+    val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(Uri.parse(media.contentUri), media.mimeType)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "לא נמצאה אפליקציה שיכולה לפתוח את הקובץ", Toast.LENGTH_SHORT).show()
     }
 }

@@ -44,7 +44,7 @@ class UserInitiatedDownloadJobService : JobService() {
                     }
                 }
                 when {
-                    outcome.succeeded -> notifications.showComplete(downloadId)
+                    outcome.succeeded -> notifications.showComplete(downloadId, outcome.savedMedia)
                     outcome.shouldRetry -> notifications.cancel(downloadId)
                     else -> notifications.showFailed(downloadId)
                 }
