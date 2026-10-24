@@ -5,20 +5,26 @@ import android.content.Context
 import android.net.Uri
 import android.media.MediaExtractor as AndroidMediaExtractor
 import android.os.Build
+import android.os.SystemClock
 import android.os.Environment
 import android.provider.MediaStore
 import com.arthenica.ffmpegkit.FFmpegKit
 import com.arthenica.ffmpegkit.ReturnCode
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
-import kotlin.coroutines.resume
+import java.util.concurrent.atomic.AtomicLong
 
 fun interface MediaExtractor {
     suspend fun downloadSource(
@@ -188,29 +194,98 @@ class FfmpegSourceMerger(private val executor: FfmpegExecutor) : MediaSourceMerg
     }
 }
 
-class FfmpegKitExecutor : FfmpegExecutor {
+class FfmpegKitExecutor(
+    private val stallTimeoutMillis: Long = STALL_TIMEOUT_MILLIS,
+) : FfmpegExecutor {
     @Volatile
     private var activeSessionId: Long? = null
 
-    override suspend fun execute(arguments: List<String>): FfmpegExecution =
-        suspendCancellableCoroutine { continuation ->
-            val session = FFmpegKit.executeWithArgumentsAsync(arguments.toTypedArray()) { completed ->
-                activeSessionId = null
-                if (continuation.isActive) {
-                    continuation.resume(
-                        FfmpegExecution(
-                            succeeded = ReturnCode.isSuccess(completed.returnCode),
-                            output = completed.allLogsAsString.orEmpty(),
-                        ),
+    override suspend fun execute(arguments: List<String>): FfmpegExecution {
+        val lastActivity = AtomicLong(SystemClock.elapsedRealtime())
+        val completion = CompletableDeferred<FfmpegExecution>()
+        val session = FFmpegKit.executeWithArgumentsAsync(
+            arguments.toTypedArray(),
+            { completed ->
+                completion.complete(
+                    FfmpegExecution(
+                        succeeded = ReturnCode.isSuccess(completed.returnCode),
+                        output = completed.allLogsAsString.orEmpty(),
+                    ),
+                )
+            },
+            { _ -> lastActivity.set(SystemClock.elapsedRealtime()) },
+            { _ -> lastActivity.set(SystemClock.elapsedRealtime()) },
+        )
+        activeSessionId = session.sessionId
+        return try {
+            awaitWithStallWatchdog(
+                completion = completion,
+                lastActivityMillis = lastActivity::get,
+                nowMillis = SystemClock::elapsedRealtime,
+                stallTimeoutMillis = stallTimeoutMillis,
+                graceMillis = STALL_CANCEL_GRACE_MILLIS,
+                onStall = { FFmpegKit.cancel(session.sessionId) },
+                onAbandon = {
+                    FfmpegExecution(
+                        succeeded = false,
+                        output = "FFmpeg produced no output for ${stallTimeoutMillis / 1_000} s and did not " +
+                            "stop when cancelled; the session was abandoned",
                     )
-                }
-            }
-            activeSessionId = session.sessionId
-            continuation.invokeOnCancellation { FFmpegKit.cancel(session.sessionId) }
+                },
+            )
+        } catch (cancelled: CancellationException) {
+            FFmpegKit.cancel(session.sessionId)
+            throw cancelled
+        } finally {
+            if (activeSessionId == session.sessionId) activeSessionId = null
         }
+    }
 
     override fun cancel() {
         activeSessionId?.let(FFmpegKit::cancel)
+    }
+
+    companion object {
+        /** FFmpeg logs while probing and reports statistics every few hundred ms while encoding. */
+        const val STALL_TIMEOUT_MILLIS = 90_000L
+        const val STALL_CANCEL_GRACE_MILLIS = 10_000L
+    }
+}
+
+/**
+ * Waits for [completion] while watching for a stall: when [lastActivityMillis] has not moved for
+ * [stallTimeoutMillis], [onStall] is invoked (cancelling the FFmpeg session) and, if the session
+ * still has not completed [graceMillis] later, [onAbandon] supplies the result instead.
+ *
+ * Needed because some encoders never return. On API 26/29 x86_64 emulator images the
+ * `h264_mediacodec` encoder blocks forever, which previously parked a download at "100%" with no
+ * way out; with the watchdog the transcoder falls through to the next command in its chain.
+ */
+internal suspend fun <T> awaitWithStallWatchdog(
+    completion: Deferred<T>,
+    lastActivityMillis: () -> Long,
+    nowMillis: () -> Long,
+    stallTimeoutMillis: Long,
+    graceMillis: Long,
+    onStall: () -> Unit,
+    onAbandon: () -> T,
+): T = coroutineScope {
+    val watchdog = launch {
+        while (true) {
+            val idle = nowMillis() - lastActivityMillis()
+            if (idle >= stallTimeoutMillis) break
+            delay(stallTimeoutMillis - idle)
+        }
+        onStall()
+        delay(graceMillis)
+    }
+    try {
+        select {
+            completion.onAwait { it }
+            watchdog.onJoin { onAbandon() }
+        }
+    } finally {
+        watchdog.cancel()
     }
 }
 
