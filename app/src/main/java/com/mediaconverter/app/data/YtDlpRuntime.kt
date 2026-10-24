@@ -1,8 +1,7 @@
 package com.mediaconverter.app.data
 
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CompletableDeferred
 
 data class YtDlpCommand(
     val processId: String,
@@ -36,11 +35,13 @@ class YtDlpRuntime(
     private val updateStore: YtDlpUpdateStore,
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
-    private val mutex = Mutex()
+    private val gate = ProcessGate()
+
+    @Volatile
     private var initialized = false
 
-    suspend fun refreshIfDue() = mutex.withLock {
-        ensureInitialized()
+    suspend fun refreshIfDue() = gate.exclusive {
+        initializeIfNeeded()
         updateIfDue()
     }
 
@@ -60,20 +61,25 @@ class YtDlpRuntime(
         return execute(command)
     }
 
-    suspend fun execute(command: YtDlpCommand): YtDlpResult = mutex.withLock {
+    suspend fun execute(command: YtDlpCommand): YtDlpResult {
         ensureInitialized()
-        try {
-            executeCancellable(command)
+        return try {
+            gate.shared { executeCancellable(command) }
         } catch (failure: Throwable) {
             if (failure is CancellationException || !YtDlpFailureClassifier.shouldUpdateAndRetry(failure)) {
                 throw failure
             }
             try {
-                updateIfDue()
+                // The exclusive slot waits for every running download. Only ask for it when the
+                // throttle says an update can actually happen; otherwise a routine 403 during a
+                // download would park this lookup (and hold back all new ones) for nothing.
+                if (isUpdateDue()) gate.exclusive { updateIfDue() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
                 // Keep the bundled executable and perform the single controlled retry.
             }
-            executeCancellable(command)
+            gate.shared { executeCancellable(command) }
         }
     }
 
@@ -88,14 +94,24 @@ class YtDlpRuntime(
 
     private suspend fun ensureInitialized() {
         if (initialized) return
+        gate.exclusive { initializeIfNeeded() }
+    }
+
+    /** Must be called while holding the exclusive gate. */
+    private suspend fun initializeIfNeeded() {
+        if (initialized) return
         client.initialize()
         initialized = true
     }
 
+    private suspend fun isUpdateDue(): Boolean =
+        nowMillis() - updateStore.readLastUpdateMillis() >= UPDATE_INTERVAL_MILLIS
+
+    /** Must be called while holding the exclusive gate: no process may run while the binary is replaced. */
     private suspend fun updateIfDue() {
+        // Re-checked under the gate: another caller may have updated while we waited for it.
+        if (!isUpdateDue()) return
         val now = nowMillis()
-        val lastUpdate = updateStore.readLastUpdateMillis()
-        if (now - lastUpdate < UPDATE_INTERVAL_MILLIS) return
         try {
             client.update()
         } finally {
@@ -107,6 +123,69 @@ class YtDlpRuntime(
 
     companion object {
         const val UPDATE_INTERVAL_MILLIS = 24L * 60L * 60L * 1_000L
+    }
+}
+
+/**
+ * Coordinates yt-dlp process execution with initialisation and binary replacement.
+ *
+ * Any number of processes may run at the same time (youtubedl-android isolates them by
+ * process id), so a metadata lookup never waits behind an unrelated download. Initialising
+ * or updating the executable needs it to be idle, so an exclusive request waits for running
+ * processes to finish and, while it waits, holds back newly requested processes so a steady
+ * stream of executions cannot starve it.
+ */
+internal class ProcessGate {
+    private val lock = Any()
+    private var running = 0
+    private var exclusiveHeld = false
+    private var exclusiveWaiting = 0
+    private var stateChanged = CompletableDeferred<Unit>()
+
+    suspend fun <T> shared(block: suspend () -> T): T {
+        acquire(canEnter = { !exclusiveHeld && exclusiveWaiting == 0 }, enter = { running++ })
+        try {
+            return block()
+        } finally {
+            change { running-- }
+        }
+    }
+
+    suspend fun <T> exclusive(block: suspend () -> T): T {
+        change { exclusiveWaiting++ }
+        try {
+            acquire(canEnter = { !exclusiveHeld && running == 0 }, enter = { exclusiveHeld = true })
+        } finally {
+            // Runs after a successful acquisition as well as after cancellation while waiting,
+            // so held-back processes are released either way.
+            change { exclusiveWaiting-- }
+        }
+        try {
+            return block()
+        } finally {
+            change { exclusiveHeld = false }
+        }
+    }
+
+    private suspend fun acquire(canEnter: () -> Boolean, enter: () -> Unit) {
+        while (true) {
+            val changed = synchronized(lock) {
+                if (canEnter()) {
+                    enter()
+                    return
+                }
+                stateChanged
+            }
+            changed.await()
+        }
+    }
+
+    private fun change(mutation: () -> Unit) {
+        val waiters = synchronized(lock) {
+            mutation()
+            stateChanged.also { stateChanged = CompletableDeferred() }
+        }
+        waiters.complete(Unit)
     }
 }
 
