@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.work.ForegroundInfo
@@ -25,14 +26,17 @@ class DownloadNotifications(private val context: Context) {
     }
 
     fun ongoing(downloadId: Long, title: String, progress: Int, eta: String): Notification =
+        progress(downloadId, title, progress, eta)
+            .setOngoing(true)
+            .build()
+
+    private fun progress(downloadId: Long, title: String, progress: Int, eta: String): NotificationCompat.Builder =
         NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(if (eta.isBlank()) "$progress%" else "$progress% · $eta")
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, progress, progress <= 0)
-            .setOngoing(true)
             .addAction(0, "ביטול", cancelIntent(downloadId))
-            .build()
 
     fun foreground(downloadId: Long, title: String, progress: Int, eta: String): ForegroundInfo {
         val notification = ongoing(downloadId, title, progress, eta)
@@ -43,15 +47,26 @@ class DownloadNotifications(private val context: Context) {
         }
     }
 
-    fun showComplete(downloadId: Long) {
-        manager.notify(
-            notificationId(downloadId),
-            NotificationCompat.Builder(context, CHANNEL_ID)
-                .setContentTitle("ההורדה הושלמה")
-                .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setAutoCancel(true)
-                .build(),
-        )
+    /**
+     * Posts progress directly when the worker could not become a foreground service. Deliberately
+     * not "ongoing": with no service to take it down, a process kill mid-download would otherwise
+     * leave a notification the user cannot swipe away.
+     */
+    fun notifyProgress(downloadId: Long, title: String, progress: Int, eta: String) {
+        manager.notify(notificationId(downloadId), progress(downloadId, title, progress, eta).build())
+    }
+
+    fun showComplete(downloadId: Long, savedMedia: SavedMedia? = null) {
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle("ההורדה הושלמה")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setAutoCancel(true)
+        if (savedMedia != null) {
+            builder
+                .setContentText(savedMedia.displayName)
+                .setContentIntent(openIntent(downloadId, savedMedia))
+        }
+        manager.notify(notificationId(downloadId), builder.build())
     }
 
     fun showFailed(downloadId: Long) {
@@ -67,6 +82,18 @@ class DownloadNotifications(private val context: Context) {
 
     fun cancel(downloadId: Long) {
         manager.cancel(notificationId(downloadId))
+    }
+
+    private fun openIntent(downloadId: Long, savedMedia: SavedMedia): PendingIntent {
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(Uri.parse(savedMedia.contentUri), savedMedia.mimeType)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        return PendingIntent.getActivity(
+            context,
+            notificationId(downloadId),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 
     private fun cancelIntent(downloadId: Long): PendingIntent {

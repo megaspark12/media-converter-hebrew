@@ -17,13 +17,14 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+                // Re-check under the lock: two callers racing here (UI scheduler and the job
+                // service) must share one instance, otherwise Room's invalidation tracker on
+                // one copy never sees progress written through the other.
+                INSTANCE ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "media_converter_db"
-                ).addMigrations(MIGRATION_1_2).build()
-                INSTANCE = instance
-                instance
+                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
             }
         }
 

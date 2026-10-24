@@ -18,12 +18,24 @@ android {
 
         ndk {
             // Intentional distribution policy: ship only to 64-bit ARM devices.
-            // CI runs the native conversion stack on arm64-v8a emulators.
+            // The debug build type below adds x86_64 so hosted CI emulators can run
+            // the native conversion stack; release stays arm64-v8a only.
             abiFilters += listOf("arm64-v8a")
         }
     }
 
     buildTypes {
+        debug {
+            ndk {
+                // GitHub-hosted runners cannot boot arm64 emulators (the Apple-silicon macOS
+                // runners are VMs without nested virtualization), so CI runs x86_64 emulators
+                // on Linux with KVM. Both native dependencies ship x86_64 libs; ffmpeg-kit-full
+                // 8.1.7 ships no armeabi-v7a or x86, so this is the only extra ABI possible.
+                // Build-type filters are unioned with defaultConfig: debug APKs carry
+                // arm64-v8a + x86_64, release APKs are unaffected.
+                abiFilters += "x86_64"
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
