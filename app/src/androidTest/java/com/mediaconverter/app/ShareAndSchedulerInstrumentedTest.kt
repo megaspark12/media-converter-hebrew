@@ -5,7 +5,9 @@ import android.content.Intent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.text.SpannableString
+import androidx.core.content.ContextCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -25,12 +27,31 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class ShareAndSchedulerInstrumentedTest {
     @Before
-    fun grantNotificationPermission() {
+    fun grantRuntimePermissionsUpFront() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val packageName = instrumentation.targetContext.packageName
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val instrumentation = InstrumentationRegistry.getInstrumentation()
             instrumentation.uiAutomation.grantRuntimePermission(
-                instrumentation.targetContext.packageName,
+                packageName,
                 Manifest.permission.POST_NOTIFICATIONS,
+            )
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            // Android 8-9: MainActivity asks for WRITE_EXTERNAL_STORAGE on launch, and the system
+            // dialog covers the share UI these tests wait for, so UiAutomator never sees the URL.
+            // UiAutomation.grantRuntimePermission() only exists from API 28; the shell works on all.
+            ParcelFileDescriptor.AutoCloseInputStream(
+                instrumentation.uiAutomation.executeShellCommand(
+                    "pm grant $packageName ${Manifest.permission.WRITE_EXTERNAL_STORAGE}",
+                ),
+            ).use { it.readBytes() }
+            assertEquals(
+                "pm grant WRITE_EXTERNAL_STORAGE did not take effect on API ${Build.VERSION.SDK_INT}",
+                PackageManager.PERMISSION_GRANTED,
+                ContextCompat.checkSelfPermission(
+                    instrumentation.targetContext,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                ),
             )
         }
     }

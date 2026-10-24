@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MediaConverter" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- The Compose theme is always dark. Match the window so the cold-start frame, the
+         Android 12+ splash screen and the area behind translucent system bars are dark too,
+         instead of flashing white before the first composition. -->
+    <style name="Theme.MediaConverter" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+    </style>
 </resources>

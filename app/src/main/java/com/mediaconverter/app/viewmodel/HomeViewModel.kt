@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.mediaconverter.app.data.ConversionFailure
 import com.mediaconverter.app.data.DownloadEngine
 import com.mediaconverter.app.data.ApiAwareDownloadScheduler
 import com.mediaconverter.app.data.DownloadSpec
@@ -40,6 +41,7 @@ data class HomeUiState(
     val downloadProgress: Int = 0,
     val downloadMessage: String? = null,
     val downloadCompleted: Boolean = false,
+    /** The finished download's record, so the UI can open or share the saved file. */
     val completedDownload: DownloadEntity? = null,
     val selectedFormat: OutputFormat = OutputFormat.MP4,
     val selectedQuality: String = "best",
@@ -105,6 +107,7 @@ class HomeViewModel(
                 downloadProgress = 0,
                 downloadMessage = null,
                 downloadCompleted = false,
+                completedDownload = null,
             )
         }
         updateUrl(input, forceNewSession = true)
@@ -276,17 +279,16 @@ class HomeViewModel(
                 .takeWhile { record ->
                     if (_uiState.value.activeDownloadId != downloadId) return@takeWhile false
                     val terminal = record.status in setOf("completed", "failed", "cancelled")
+                    val completed = record.status == "completed"
                     _uiState.value = _uiState.value.copy(
                         isDownloading = !terminal,
                         activeDownloadId = if (terminal) null else downloadId,
                         downloadProgress = record.progress,
-                        downloadCompleted = record.status == "completed",
-                        completedDownload = record.takeIf {
-                            it.status == "completed" && it.outputUri.isNotBlank()
-                        },
+                        downloadCompleted = completed,
+                        completedDownload = record.takeIf { completed && it.outputUri.isNotBlank() },
                         downloadMessage = when (record.status) {
                             "completed" -> "ההורדה הושלמה"
-                            "failed" -> "ההורדה נכשלה: ${record.errorMessage}"
+                            "failed" -> downloadFailureMessage(record.errorCode)
                             "cancelled" -> CANCELLED_MESSAGE
                             "pending" -> "ההורדה ממתינה… ${record.progress}%"
                             else -> "מוריד… ${record.progress}%"
@@ -328,4 +330,24 @@ class HomeViewModel(
         const val CANCELLATION_MESSAGE_MILLIS = 2_000L
         const val CANCELLED_MESSAGE = "ההורדה בוטלה"
     }
+}
+
+/**
+ * Maps a persisted failure code to a Hebrew sentence. The raw `errorMessage` stays in the
+ * database for diagnostics; it is English and can carry pages of FFmpeg or yt-dlp output,
+ * which is not something to show on the home screen.
+ */
+internal fun downloadFailureMessage(errorCode: String): String {
+    val failure = ConversionFailure.entries.firstOrNull { it.code == errorCode }
+    val reason = when (failure) {
+        ConversionFailure.INVALID_URL -> "הקישור אינו נתמך"
+        ConversionFailure.OFFLINE -> "אין חיבור לאינטרנט"
+        ConversionFailure.LOGIN_REQUIRED -> "הסרטון פרטי או דורש התחברות"
+        ConversionFailure.PROVIDER_CHANGED -> "האתר השתנה, נסו שוב מאוחר יותר"
+        ConversionFailure.NO_COMPATIBLE_FORMAT -> "לא נמצא פורמט מתאים להורדה"
+        ConversionFailure.STORAGE_FULL -> "אין מקום באחסון או אין הרשאה לשמור קבצים"
+        ConversionFailure.PROCESSING_FAILED -> "ההמרה לא הצליחה, נסו שוב"
+        ConversionFailure.DOWNLOAD_FAILED, ConversionFailure.CANCELLED, null -> null
+    }
+    return if (reason == null) "ההורדה נכשלה. נסו שוב" else "ההורדה נכשלה: $reason"
 }

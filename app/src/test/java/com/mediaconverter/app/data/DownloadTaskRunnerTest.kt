@@ -2,6 +2,7 @@ package com.mediaconverter.app.data
 
 import com.mediaconverter.app.data.db.DownloadEntity
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -56,6 +57,25 @@ class DownloadTaskRunnerTest {
 
         assertTrue("Expected fatal error, got $thrown", thrown is OutOfMemoryError)
         assertTrue(thrown?.message == "fatal")
+    }
+
+    @Test
+    fun successfulRunReturnsTheSavedMediaSoCallersCanOpenIt() = runTest {
+        val saved = SavedMedia("content://media/external/downloads/9", "clip.mp4", "video/mp4", 10, 1_000)
+        val runner = DownloadTaskRunner(
+            DownloadTaskDependencies(
+                repository = FakeDownloadTaskStore(),
+                convert = { _, _, _ -> Result.success(saved) },
+                deleteSavedMedia = {},
+                elapsedRealtime = { 0L },
+                log = {},
+            ),
+        )
+
+        val result = runner.run(42) { _, _ -> }
+
+        assertTrue(result.succeeded)
+        assertEquals(saved, result.savedMedia)
     }
 }
 

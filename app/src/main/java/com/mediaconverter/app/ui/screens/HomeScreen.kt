@@ -51,8 +51,8 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     val scrollState = rememberScrollState()
 
     LaunchedEffect(sharedUrls) {
@@ -62,6 +62,10 @@ fun HomeScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
+            // The activity draws edge-to-edge (mandatory from Android 15 with this targetSdk), so
+            // keep the content clear of the status bar, the navigation bar, display cutouts and
+            // the keyboard; otherwise the download button hides behind Samsung's 3-button bar.
+            .safeDrawingPadding()
             .verticalScroll(scrollState)
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -161,6 +165,19 @@ fun HomeScreen(
             )
         }
 
+        val completedDownload = uiState.completedDownload
+        if (uiState.downloadCompleted && completedDownload != null) {
+            OutlinedButton(
+                onClick = { openSavedMedia(context, completedDownload) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+            ) {
+                Text(stringResource(R.string.open), style = MaterialTheme.typography.titleMedium)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
         if (uiState.isDownloading) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
             OutlinedButton(onClick = viewModel::cancelDownload) {
@@ -214,12 +231,15 @@ fun HomeScreen(
     }
 }
 
+private fun resolvedMimeType(download: DownloadEntity): String =
+    download.mimeType.ifBlank {
+        OutputFormat.entries.firstOrNull { it.value == download.format }?.mimeType ?: "*/*"
+    }
+
 private fun shareDownload(context: Context, download: DownloadEntity) {
     val uri = Uri.parse(download.outputUri)
     val sendIntent = Intent(Intent.ACTION_SEND).apply {
-        type = download.mimeType.ifBlank {
-            OutputFormat.entries.first { it.value == download.format }.mimeType
-        }
+        type = resolvedMimeType(download)
         putExtra(Intent.EXTRA_STREAM, uri)
         clipData = ClipData.newRawUri(download.title, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -230,5 +250,16 @@ private fun shareDownload(context: Context, download: DownloadEntity) {
         Toast.makeText(context, R.string.error_share_failed, Toast.LENGTH_LONG).show()
     } catch (_: SecurityException) {
         Toast.makeText(context, R.string.error_share_failed, Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun openSavedMedia(context: Context, download: DownloadEntity) {
+    val intent = Intent(Intent.ACTION_VIEW)
+        .setDataAndType(Uri.parse(download.outputUri), resolvedMimeType(download))
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "לא נמצאה אפליקציה שיכולה לפתוח את הקובץ", Toast.LENGTH_SHORT).show()
     }
 }

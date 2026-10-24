@@ -1,9 +1,12 @@
 package com.mediaconverter.app.data
 
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -11,6 +14,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class YtDlpRuntimeTest {
     @Test
     fun metadataCommandIsBoundedAndTransportSecurityRemainsEnabled() = runTest {
@@ -28,16 +32,187 @@ class YtDlpRuntimeTest {
     }
 
     @Test
-    fun executionIsSerializedAcrossConcurrentRequests() = runTest {
-        val client = FakeYtDlpClient(executionDelayMillis = 100)
+    fun metadataResolvesWhileDownloadIsStillRunning() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val client = FakeYtDlpClient(
+            started = started,
+            delays = mapOf("download-1" to 10_000L, "meta" to 100L),
+        )
         val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 10L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
 
-        val first = async { runtime.metadata(youtubeUrl("one"), "one") }
-        val second = async { runtime.metadata(youtubeUrl("two"), "two") }
-        first.await()
-        second.await()
+        val info = async { runtime.metadata(youtubeUrl("second"), "meta") }
+        advanceTimeBy(1_000)
 
-        assertEquals(1, client.maxActiveExecutions.get())
+        assertTrue("metadata must not wait behind the running download", info.isCompleted)
+        assertTrue(download.isActive)
+        assertEquals("{\"title\":\"ok\"}", info.await().stdout)
+        assertEquals(2, client.maxActiveExecutions.get())
+        download.await()
+    }
+
+    @Test
+    fun binaryUpdateWaitsForRunningExecutionToFinish() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val store = InMemoryUpdateStore()
+        val client = FakeYtDlpClient(started = started, executionDelayMillis = 10_000)
+        val runtime = YtDlpRuntime(client, store, nowMillis = { 90_000_000L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+
+        val refresh = async { runtime.refreshIfDue() }
+        advanceTimeBy(5_000)
+        assertEquals(0, client.updateCount)
+        assertTrue(download.isActive)
+
+        download.await()
+        refresh.await()
+        assertEquals(1, client.updateCount)
+        assertEquals(0, client.activeExecutionsAtLastUpdate)
+        assertEquals(90_000_000L, store.lastUpdateMillis)
+    }
+
+    @Test
+    fun pendingBinaryUpdateRunsBeforeNewlyRequestedExecutions() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val client = FakeYtDlpClient(started = started, delays = mapOf("download-1" to 10_000L))
+        val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 90_000_000L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+        val refresh = async { runtime.refreshIfDue() }
+        runCurrent()
+
+        val info = async { runtime.metadata(youtubeUrl("later"), "meta") }
+        advanceTimeBy(5_000)
+        assertEquals(listOf("download-1"), client.commands.map { it.processId })
+
+        download.await()
+        refresh.await()
+        info.await()
+        assertEquals(listOf("download-1", "meta"), client.commands.map { it.processId })
+        assertEquals(1, client.updateCount)
+        assertEquals(0, client.activeExecutionsAtLastUpdate)
+    }
+
+    @Test
+    fun providerFailureUpdateWaitsForRunningDownloadBeforeRetrying() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val store = InMemoryUpdateStore()
+        val client = FakeYtDlpClient(
+            started = started,
+            delays = mapOf("download-1" to 10_000L),
+            outcomes = ArrayDeque(
+                listOf(
+                    Result.success(YtDlpResult("download", "")),
+                    Result.failure(YtDlpException("HTTP Error 403: Forbidden")),
+                    Result.success(YtDlpResult("{\"title\":\"ok\"}", "")),
+                ),
+            ),
+        )
+        val runtime = YtDlpRuntime(client, store, nowMillis = { 90_000_000L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+
+        val info = async { runtime.metadata(youtubeUrl("retry"), "meta") }
+        advanceTimeBy(5_000)
+        assertEquals(listOf("download-1", "meta"), client.commands.map { it.processId })
+        assertEquals(0, client.updateCount)
+        assertTrue(info.isActive)
+
+        assertEquals("download", download.await().stdout)
+        assertEquals("{\"title\":\"ok\"}", info.await().stdout)
+        assertEquals(1, client.updateCount)
+        assertEquals(0, client.activeExecutionsAtLastUpdate)
+        assertEquals(listOf("download-1", "meta", "meta"), client.commands.map { it.processId })
+        assertEquals(90_000_000L, store.lastUpdateMillis)
+    }
+
+    @Test
+    fun providerFailureRetryDoesNotWaitForDownloadWhenNoUpdateIsDue() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val client = FakeYtDlpClient(
+            started = started,
+            delays = mapOf("download-1" to 10_000L),
+            outcomes = ArrayDeque(
+                listOf(
+                    Result.success(YtDlpResult("download", "")),
+                    Result.failure(YtDlpException("HTTP Error 403: Forbidden")),
+                    Result.success(YtDlpResult("{\"title\":\"ok\"}", "")),
+                ),
+            ),
+        )
+        // Last update check succeeded moments ago, so the throttle forbids another one.
+        val store = InMemoryUpdateStore().apply { writeState(YtDlpUpdateState(lastSuccessfulCheckMillis = 5L)) }
+        val runtime = YtDlpRuntime(client, store, nowMillis = { 10L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+
+        val info = async { runtime.metadata(youtubeUrl("retry"), "meta") }
+        advanceTimeBy(1_000)
+
+        assertTrue("retry must not queue behind the download when no update can happen", info.isCompleted)
+        assertTrue(download.isActive)
+        assertEquals("{\"title\":\"ok\"}", info.await().stdout)
+        assertEquals(listOf("download-1", "meta", "meta"), client.commands.map { it.processId })
+        assertEquals(0, client.updateCount)
+        download.await()
+    }
+
+    @Test
+    fun cancellationWhileHeldBackByPendingUpdateNeverStartsAProcess() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val client = FakeYtDlpClient(started = started, delays = mapOf("download-1" to 10_000L))
+        val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 90_000_000L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+        val refresh = async { runtime.refreshIfDue() }
+        runCurrent()
+        val info = async { runtime.metadata(youtubeUrl("held"), "meta") }
+        advanceTimeBy(1_000)
+        assertEquals(listOf("download-1"), client.commands.map { it.processId })
+
+        info.cancel()
+        download.await()
+        refresh.await()
+
+        assertTrue(info.isCancelled)
+        assertEquals(listOf("download-1"), client.commands.map { it.processId })
+        assertTrue("no process was started, so none may be cancelled", client.cancelledProcessIds.isEmpty())
+        assertEquals(1, client.updateCount)
+        // The gate must be usable afterwards: a cancelled waiter may not leave a permit behind.
+        assertEquals("{\"title\":\"ok\"}", runtime.metadata(youtubeUrl("after"), "after").stdout)
+    }
+
+    @Test
+    fun cancellationWhileWaitingForUpdateSlotDoesNotRetry() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val client = FakeYtDlpClient(
+            started = started,
+            delays = mapOf("download-1" to 10_000L),
+            outcomes = ArrayDeque(
+                listOf(
+                    Result.success(YtDlpResult("download", "")),
+                    Result.failure(YtDlpException("HTTP Error 403: Forbidden")),
+                ),
+            ),
+        )
+        val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 90_000_000L })
+        val download = async { runtime.execute(downloadCommand("download-1")) }
+        started.await()
+        val info = async { runtime.metadata(youtubeUrl("retry"), "meta") }
+        advanceTimeBy(1_000)
+        assertEquals(listOf("download-1", "meta"), client.commands.map { it.processId })
+
+        info.cancel()
+        assertEquals("download", download.await().stdout)
+
+        assertTrue(info.isCancelled)
+        assertEquals(listOf("download-1", "meta"), client.commands.map { it.processId })
+        assertEquals(0, client.updateCount)
+        // A cancelled exclusive waiter must release its hold on the gate, or no lookup ever runs again.
+        assertEquals("{\"title\":\"ok\"}", runtime.metadata(youtubeUrl("after"), "after").stdout)
+        assertEquals(listOf("download-1", "meta", "after"), client.commands.map { it.processId })
     }
 
     @Test
@@ -166,6 +341,12 @@ class YtDlpRuntimeTest {
 
     private fun youtubeUrl(id: String) =
         NormalizedMediaUrl("https://youtu.be/$id", SupportedPlatform.YOUTUBE)
+
+    private fun downloadCommand(processId: String) = YtDlpCommand(
+        processId = processId,
+        sourceUrl = "https://youtu.be/long-video",
+        arguments = listOf("-f", "best", "-o", "source.%(ext)s"),
+    )
 }
 
 private fun YtDlpCommand.valueAfter(option: String): String? =
@@ -181,6 +362,7 @@ private class InMemoryUpdateStore : YtDlpUpdateStore {
 private class FakeYtDlpClient(
     private val outcomes: ArrayDeque<Result<YtDlpResult>> = ArrayDeque(),
     private val executionDelayMillis: Long = 0,
+    private val delays: Map<String, Long> = emptyMap(),
     private val started: CompletableDeferred<Unit>? = null,
     var updateFailure: Throwable? = null,
     private val updateResult: Boolean = true,
@@ -190,18 +372,21 @@ private class FakeYtDlpClient(
     val maxActiveExecutions = AtomicInteger()
     private val activeExecutions = AtomicInteger()
     var updateCount = 0
+    var activeExecutionsAtLastUpdate = -1
 
     override suspend fun initialize() = Unit
 
     override suspend fun execute(command: YtDlpCommand): YtDlpResult {
         commands += command
+        // Outcomes are consumed in start order so concurrent executions stay deterministic.
+        val outcome = outcomes.removeFirstOrNull() ?: Result.success(YtDlpResult("{\"title\":\"ok\"}", ""))
         val active = activeExecutions.incrementAndGet()
         maxActiveExecutions.updateAndGet { maxOf(it, active) }
         started?.complete(Unit)
         return try {
-            if (executionDelayMillis > 0) delay(executionDelayMillis)
-            if (outcomes.isEmpty()) YtDlpResult("{\"title\":\"ok\"}", "")
-            else outcomes.removeFirst().getOrThrow()
+            val delayMillis = delays[command.processId] ?: executionDelayMillis
+            if (delayMillis > 0) delay(delayMillis)
+            outcome.getOrThrow()
         } finally {
             activeExecutions.decrementAndGet()
         }
@@ -209,6 +394,7 @@ private class FakeYtDlpClient(
 
     override suspend fun update(): Boolean {
         updateCount += 1
+        activeExecutionsAtLastUpdate = activeExecutions.get()
         updateFailure?.let { throw it }
         return updateResult
     }

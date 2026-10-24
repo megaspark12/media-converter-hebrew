@@ -17,6 +17,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -307,6 +308,64 @@ class HomeViewModelTest {
 
         assertEquals(8L, viewModel.uiState.value.activeDownloadId)
         assertEquals(newMessage, viewModel.uiState.value.downloadMessage)
+    }
+
+    @Test
+    fun failedDownloadExplainsTheReasonInHebrewInsteadOfRawDiagnostics() = runTest(mainDispatcherRule.dispatcher) {
+        val command = FakeDownloadCommand()
+        val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
+        viewModel.onUrlChange("https://youtu.be/failed")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+
+        command.emit(
+            DownloadEntity(
+                id = 7,
+                url = "https://youtu.be/failed",
+                status = "failed",
+                errorMessage = "No compatible FFmpeg conversion path succeeded: ffmpeg version 8.0 Copyright",
+                errorCode = "processing_failed",
+            ),
+        )
+        runCurrent()
+
+        val message = viewModel.uiState.value.downloadMessage!!
+        assertEquals(downloadFailureMessage("processing_failed"), message)
+        assertFalse(message.contains("FFmpeg"))
+        assertEquals(false, viewModel.uiState.value.isDownloading)
+    }
+
+    @Test
+    fun completedDownloadExposesTheSavedFileForOpening() = runTest(mainDispatcherRule.dispatcher) {
+        val command = FakeDownloadCommand()
+        val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
+        viewModel.onUrlChange("https://youtu.be/open-me")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+
+        command.emit(
+            DownloadEntity(
+                id = 7,
+                url = "https://youtu.be/open-me",
+                status = "completed",
+                progress = 100,
+                outputUri = "content://media/external/downloads/15",
+                mimeType = "audio/mpeg",
+            ),
+        )
+        runCurrent()
+
+        val completed = viewModel.uiState.value.completedDownload
+        assertEquals("content://media/external/downloads/15", completed?.outputUri)
+        assertEquals("audio/mpeg", completed?.mimeType)
+
+        viewModel.startDownload()
+        runCurrent()
+        assertEquals(null, viewModel.uiState.value.completedDownload)
     }
 
     @Test
