@@ -18,10 +18,15 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class DownloadWorkerFailureInstrumentedTest {
     @Test
-    fun foregroundRejectionMarksDownloadFailedInsteadOfLeavingItPendingAtZero() = runBlocking {
+    fun foregroundRejectionDoesNotStopTheWorkerOrLeaveTheRowPendingAtZero() = runBlocking {
+        // Android 12+ rejects a foreground-service start while the app is in the background.
+        // The worker must keep running as a regular job and record the download's own outcome,
+        // never die on the rejection and leave the row "pending" at 0% forever. An unsupported
+        // URL makes that outcome deterministic (invalid_url, no network) so the test proves the
+        // run proceeded past the rejection.
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val dao = AppDatabase.getInstance(context).downloadDao()
-        val id = dao.insertDownload(DownloadEntity(url = "https://youtu.be/foreground-rejected"))
+        val id = dao.insertDownload(DownloadEntity(url = "https://example.com/not-a-supported-site"))
         try {
             val worker = TestListenableWorkerBuilder<DownloadWorker>(
                 context, inputData = workDataOf(DownloadWorker.KEY_DOWNLOAD_ID to id),
@@ -33,7 +38,8 @@ class DownloadWorkerFailureInstrumentedTest {
 
             val record = requireNotNull(dao.getDownloadById(id))
             assertEquals("failed", record.status)
-            assertTrue(record.errorMessage.contains("Foreground execution rejected"))
+            assertEquals("invalid_url", record.errorCode)
+            assertTrue(record.progress == 0 && record.retryCount == 0)
             assertEquals(ListenableWorker.Result.failure(), outcome.getOrThrow())
         } finally {
             dao.getDownloadById(id)?.let { dao.deleteDownload(it) }

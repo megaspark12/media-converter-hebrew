@@ -13,7 +13,9 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import org.junit.runner.RunWith
 import org.json.JSONArray
 import org.json.JSONObject
@@ -22,6 +24,12 @@ import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
 class YtDlpInstallationInstrumentedTest {
+    // These tests drive the real installer and wait on the runtime's exclusive gate, which the
+    // app's own startup refresh also takes. Without a bound, a stalled update on the device
+    // hangs the whole CI leg until the job timeout with no trace of where it stuck.
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(240)
+
     @Test
     fun boundedUpdateMetadataPreservesAlreadyCurrentVersion() = runBlocking {
         withInstallationState { context, actualVersion ->
