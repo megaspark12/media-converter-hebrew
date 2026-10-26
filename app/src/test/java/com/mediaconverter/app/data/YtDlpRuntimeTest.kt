@@ -1,5 +1,6 @@
 package com.mediaconverter.app.data
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -141,8 +142,9 @@ class YtDlpRuntimeTest {
                 ),
             ),
         )
-        // Last update check was moments ago, so the throttle forbids another one.
-        val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 10L })
+        // Last update check succeeded moments ago, so the throttle forbids another one.
+        val store = InMemoryUpdateStore().apply { writeState(YtDlpUpdateState(lastSuccessfulCheckMillis = 5L)) }
+        val runtime = YtDlpRuntime(client, store, nowMillis = { 10L })
         val download = async { runtime.execute(downloadCommand("download-1")) }
         started.await()
 
@@ -250,10 +252,77 @@ class YtDlpRuntimeTest {
 
         assertEquals("bundled-retry", runtime.metadata(youtubeUrl("retry"), "retry").stdout)
         assertEquals(2, client.commands.size)
-        assertEquals(90_000_000L, store.lastUpdateMillis)
+        assertEquals(0L, store.lastUpdateMillis)
 
         runCatching { runtime.refreshIfDue() }
         assertEquals(1, client.updateCount)
+    }
+
+    @Test
+    fun failedStartupUpdateCanRecoverAfterFiveMinutesAcrossRuntimeRecreation() = runTest {
+        val store = InMemoryUpdateStore()
+        val client = FakeYtDlpClient(updateFailure = YtDlpException("update server unavailable"))
+        val first = YtDlpRuntime(client, store, nowMillis = { 90_000_000L })
+        assertTrue(runCatching { first.refreshIfDue() }.isFailure)
+
+        client.updateFailure = null
+        YtDlpRuntime(client, store, nowMillis = { 90_299_999L }).refreshIfDue()
+        assertEquals(1, client.updateCount)
+        YtDlpRuntime(client, store, nowMillis = { 90_300_000L }).refreshIfDue()
+        assertEquals(2, client.updateCount)
+        assertEquals(90_300_000L, store.lastUpdateMillis)
+    }
+
+    @Test
+    fun cancellingARecoveryUpdateDoesNotRetryTheDownloadOrThrottleFutureChecks() = runTest {
+        val cancelled = CancellationException("cancel update")
+        val store = InMemoryUpdateStore()
+        val client = FakeYtDlpClient(
+            outcomes = ArrayDeque(listOf(Result.failure(YtDlpException("HTTP Error 403: Forbidden")))),
+            updateFailure = cancelled,
+        )
+        val runtime = YtDlpRuntime(client, store, nowMillis = { 90_000_000L })
+
+        val thrown = runCatching { runtime.metadata(youtubeUrl("cancel"), "cancel") }.exceptionOrNull()
+
+        assertTrue(thrown === cancelled)
+        assertEquals(1, client.commands.size)
+        assertEquals(0L, store.lastUpdateMillis)
+        client.updateFailure = null
+        runtime.refreshIfDue()
+        assertEquals(2, client.updateCount)
+    }
+
+    @Test
+    fun successfulChecksIncludingNoNewReleaseAreThrottledForOneDay() = runTest {
+        val store = InMemoryUpdateStore()
+        val client = FakeYtDlpClient(updateResult = false)
+        YtDlpRuntime(client, store, nowMillis = { 90_000_000L }).refreshIfDue()
+        YtDlpRuntime(client, store, nowMillis = { 176_399_999L }).refreshIfDue()
+        assertEquals(1, client.updateCount)
+        YtDlpRuntime(client, store, nowMillis = { 176_400_000L }).refreshIfDue()
+        assertEquals(2, client.updateCount)
+    }
+
+    @Test
+    fun firstCheckAndClockRollbackDoNotSuppressUpdates() = runTest {
+        val store = InMemoryUpdateStore()
+        val client = FakeYtDlpClient()
+        YtDlpRuntime(client, store, nowMillis = { 10L }).refreshIfDue()
+        assertEquals(1, client.updateCount)
+        YtDlpRuntime(client, store, nowMillis = { 5L }).refreshIfDue()
+        assertEquals(2, client.updateCount)
+    }
+
+    @Test
+    fun permanentFailuresAndFatalErrorsDoNotTriggerProviderRecovery() = runTest {
+        for (failure in listOf(YtDlpException("Sign in to view private video"), OutOfMemoryError("HTTP Error 403"))) {
+            val client = FakeYtDlpClient(outcomes = ArrayDeque(listOf(Result.failure(failure))))
+            val runtime = YtDlpRuntime(client, InMemoryUpdateStore(), nowMillis = { 90_000_000L })
+            assertTrue(runCatching { runtime.metadata(youtubeUrl("private"), "private") }.exceptionOrNull() === failure)
+            assertEquals(1, client.commands.size)
+            assertEquals(0, client.updateCount)
+        }
     }
 
     @Test
@@ -284,11 +353,10 @@ private fun YtDlpCommand.valueAfter(option: String): String? =
     arguments.getOrNull(arguments.indexOf(option) + 1)
 
 private class InMemoryUpdateStore : YtDlpUpdateStore {
-    var lastUpdateMillis = 0L
-    override suspend fun readLastUpdateMillis(): Long = lastUpdateMillis
-    override suspend fun writeLastUpdateMillis(value: Long) {
-        lastUpdateMillis = value
-    }
+    private var state = YtDlpUpdateState()
+    val lastUpdateMillis get() = state.lastSuccessfulCheckMillis
+    override suspend fun readState() = state
+    override suspend fun writeState(state: YtDlpUpdateState) { this.state = state }
 }
 
 private class FakeYtDlpClient(
@@ -296,7 +364,8 @@ private class FakeYtDlpClient(
     private val executionDelayMillis: Long = 0,
     private val delays: Map<String, Long> = emptyMap(),
     private val started: CompletableDeferred<Unit>? = null,
-    private val updateFailure: Throwable? = null,
+    var updateFailure: Throwable? = null,
+    private val updateResult: Boolean = true,
 ) : YtDlpClient {
     val commands = mutableListOf<YtDlpCommand>()
     val cancelledProcessIds = mutableListOf<String>()
@@ -327,7 +396,7 @@ private class FakeYtDlpClient(
         updateCount += 1
         activeExecutionsAtLastUpdate = activeExecutions.get()
         updateFailure?.let { throw it }
-        return true
+        return updateResult
     }
 
     override fun cancel(processId: String) {

@@ -33,9 +33,6 @@ sealed interface LinkUiState {
     data class Error(val url: NormalizedMediaUrl, val message: String) : LinkUiState
 }
 
-/** The file a finished download produced, so the UI can open it. */
-data class CompletedMedia(val contentUri: String, val mimeType: String)
-
 data class HomeUiState(
     val url: String = "",
     val linkState: LinkUiState = LinkUiState.Empty,
@@ -44,7 +41,8 @@ data class HomeUiState(
     val downloadProgress: Int = 0,
     val downloadMessage: String? = null,
     val downloadCompleted: Boolean = false,
-    val completedMedia: CompletedMedia? = null,
+    /** The finished download's record, so the UI can open or share the saved file. */
+    val completedDownload: DownloadEntity? = null,
     val selectedFormat: OutputFormat = OutputFormat.MP4,
     val selectedQuality: String = "best",
 ) {
@@ -109,7 +107,7 @@ class HomeViewModel(
                 downloadProgress = 0,
                 downloadMessage = null,
                 downloadCompleted = false,
-                completedMedia = null,
+                completedDownload = null,
             )
         }
         updateUrl(input, forceNewSession = true)
@@ -131,7 +129,7 @@ class HomeViewModel(
         val currentRequestId = requestId
         _uiState.value = _uiState.value.copy(
             downloadCompleted = false,
-            completedMedia = null,
+            completedDownload = null,
             downloadMessage = null,
             downloadProgress = 0,
         )
@@ -171,7 +169,7 @@ class HomeViewModel(
             url = "",
             linkState = LinkUiState.Empty,
             downloadCompleted = false,
-            completedMedia = null,
+            completedDownload = null,
             downloadMessage = null,
             downloadProgress = 0,
         )
@@ -257,11 +255,19 @@ class HomeViewModel(
     fun cancelDownload() {
         val command = downloadCommand ?: return
         val downloadId = _uiState.value.activeDownloadId ?: return
+        val cancelSessionId = uiSessionId
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(downloadMessage = "מבטל את ההורדה…")
+            fun isCurrentDownload() = cancelSessionId == uiSessionId &&
+                _uiState.value.activeDownloadId == downloadId
+            if (isCurrentDownload()) {
+                _uiState.value = _uiState.value.copy(downloadMessage = "מבטל את ההורדה…")
+            }
             runCatching { command.cancel(downloadId) }
                 .onFailure {
-                    _uiState.value = _uiState.value.copy(downloadMessage = "לא ניתן לבטל את ההורדה")
+                    if (it is CancellationException) throw it
+                    if (isCurrentDownload()) {
+                        _uiState.value = _uiState.value.copy(downloadMessage = "לא ניתן לבטל את ההורדה")
+                    }
                 }
         }
     }
@@ -279,11 +285,7 @@ class HomeViewModel(
                         activeDownloadId = if (terminal) null else downloadId,
                         downloadProgress = record.progress,
                         downloadCompleted = completed,
-                        completedMedia = if (completed && record.outputUri.isNotBlank()) {
-                            CompletedMedia(record.outputUri, record.mimeType)
-                        } else {
-                            null
-                        },
+                        completedDownload = record.takeIf { completed && it.outputUri.isNotBlank() },
                         downloadMessage = when (record.status) {
                             "completed" -> "ההורדה הושלמה"
                             "failed" -> downloadFailureMessage(record.errorCode)

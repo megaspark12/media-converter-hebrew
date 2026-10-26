@@ -13,8 +13,8 @@ android {
         applicationId = "com.mediaconverter.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 6
+        versionName = "1.1.4"
 
         ndk {
             // Intentional distribution policy: ship only to 64-bit ARM devices.
@@ -37,6 +37,8 @@ android {
             }
         }
         release {
+            // Distribution stays ARM64 only; CI verifies the release APK's lib/ directories.
+            ndk { abiFilters += "arm64-v8a" }
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -101,6 +103,7 @@ dependencies {
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.test.uiautomator)
   androidTestImplementation(libs.androidx.test.espresso.core)
+  androidTestImplementation(libs.androidx.work.testing)
 
   // Navigation
   implementation(libs.androidx.navigation3.ui)

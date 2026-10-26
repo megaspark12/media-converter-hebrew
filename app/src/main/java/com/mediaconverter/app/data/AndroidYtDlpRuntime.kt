@@ -14,9 +14,31 @@ import kotlinx.coroutines.withContext
 
 private val Context.ytDlpDataStore by preferencesDataStore(name = "yt_dlp_runtime")
 
-class AndroidYtDlpClient(private val context: Context) : YtDlpClient {
+class AndroidYtDlpClient(
+    private val context: Context,
+    private val updateChannel: YoutubeDL.UpdateChannel = YoutubeDL.UpdateChannel.STABLE,
+) : YtDlpClient {
     override suspend fun initialize() = withContext(Dispatchers.IO) {
         YoutubeDL.getInstance().init(context.applicationContext)
+        val installedVersion = runInterruptible {
+            YoutubeDL.getInstance().execute(
+                YoutubeDLRequest(emptyList()).addOption("--version"),
+            ).out.trim()
+        }
+        check(installedVersion.isNotEmpty()) { "Unable to determine the installed yt-dlp version" }
+        val preferences = context.getSharedPreferences("youtubedl-android", Context.MODE_PRIVATE)
+        if (preferences.getString("dlpVersion", null) != installedVersion) {
+            // Android restores preferences, but not the executable in noBackupFilesDir.
+            // The wrapper otherwise mistakes the bundled executable for the restored
+            // version and reports ALREADY_UP_TO_DATE without installing an update.
+            DataStoreYtDlpUpdateStore(context).writeState(YtDlpUpdateState())
+            check(
+                preferences.edit()
+                    .putString("dlpVersion", installedVersion)
+                    .putString("dlpVersionName", "yt-dlp $installedVersion")
+                    .commit(),
+            ) { "Unable to save the installed yt-dlp version" }
+        }
     }
 
     override suspend fun execute(command: YtDlpCommand): YtDlpResult =
@@ -36,8 +58,15 @@ class AndroidYtDlpClient(private val context: Context) : YtDlpClient {
             }
         }
 
-    override suspend fun update(): Boolean = withContext(Dispatchers.IO) {
-        YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE) != null
+    override suspend fun update(): Boolean = runInterruptible(Dispatchers.IO) {
+        val status = withYtDlpUpdateMetadata(context.cacheDir, updateChannel.apiUrl) { url ->
+            YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel(url))
+        }
+        when (status) {
+            YoutubeDL.UpdateStatus.DONE -> true
+            YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> false
+            null -> throw YtDlpException("yt-dlp update returned no status")
+        }
     }
 
     override fun cancel(processId: String) {
@@ -48,15 +77,26 @@ class AndroidYtDlpClient(private val context: Context) : YtDlpClient {
 }
 
 class DataStoreYtDlpUpdateStore(private val context: Context) : YtDlpUpdateStore {
-    override suspend fun readLastUpdateMillis(): Long =
-        context.ytDlpDataStore.data.first()[LAST_UPDATE] ?: 0L
+    override suspend fun readState(): YtDlpUpdateState {
+        val preferences = context.ytDlpDataStore.data.first()
+        return YtDlpUpdateState(
+            lastSuccessfulCheckMillis = preferences[LAST_SUCCESS] ?: 0L,
+            lastFailedCheckMillis = preferences[LAST_FAILURE] ?: 0L,
+        )
+    }
 
-    override suspend fun writeLastUpdateMillis(value: Long) {
-        context.ytDlpDataStore.edit { it[LAST_UPDATE] = value }
+    override suspend fun writeState(state: YtDlpUpdateState) {
+        context.ytDlpDataStore.edit {
+            it[LAST_SUCCESS] = state.lastSuccessfulCheckMillis
+            it[LAST_FAILURE] = state.lastFailedCheckMillis
+        }
     }
 
     private companion object {
-        val LAST_UPDATE = longPreferencesKey("last_stable_update_millis")
+        // The old last_stable_update_millis also recorded failures. Do not
+        // migrate it as a success and carry its 24-hour outage lockout forward.
+        val LAST_SUCCESS = longPreferencesKey("last_stable_check_success_millis")
+        val LAST_FAILURE = longPreferencesKey("last_stable_check_failure_millis")
     }
 }
 

@@ -282,6 +282,35 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun failedOlderCancellationDoesNotOverwriteANewerDownloadMessage() = runTest(mainDispatcherRule.dispatcher) {
+        val cancellation = CompletableDeferred<Unit>()
+        val command = object : DownloadCommand {
+            var nextId = 7L
+            override suspend fun start(state: HomeUiState) = nextId++
+            override fun observe(downloadId: Long): Flow<DownloadEntity?> = MutableSharedFlow()
+            override suspend fun cancel(downloadId: Long) { cancellation.await() }
+        }
+        val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
+        viewModel.onUrlChange("https://youtu.be/first")
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+        viewModel.cancelDownload()
+        runCurrent()
+
+        viewModel.onSharedUrl("https://youtu.be/second")
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+        val newMessage = viewModel.uiState.value.downloadMessage
+        cancellation.completeExceptionally(IllegalStateException("Old cancellation failed"))
+        runCurrent()
+
+        assertEquals(8L, viewModel.uiState.value.activeDownloadId)
+        assertEquals(newMessage, viewModel.uiState.value.downloadMessage)
+    }
+
+    @Test
     fun failedDownloadExplainsTheReasonInHebrewInsteadOfRawDiagnostics() = runTest(mainDispatcherRule.dispatcher) {
         val command = FakeDownloadCommand()
         val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)
@@ -330,14 +359,13 @@ class HomeViewModelTest {
         )
         runCurrent()
 
-        assertEquals(
-            CompletedMedia("content://media/external/downloads/15", "audio/mpeg"),
-            viewModel.uiState.value.completedMedia,
-        )
+        val completed = viewModel.uiState.value.completedDownload
+        assertEquals("content://media/external/downloads/15", completed?.outputUri)
+        assertEquals("audio/mpeg", completed?.mimeType)
 
         viewModel.startDownload()
         runCurrent()
-        assertEquals(null, viewModel.uiState.value.completedMedia)
+        assertEquals(null, viewModel.uiState.value.completedDownload)
     }
 
     @Test

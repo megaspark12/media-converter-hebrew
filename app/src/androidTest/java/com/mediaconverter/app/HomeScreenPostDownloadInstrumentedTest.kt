@@ -55,6 +55,7 @@ class HomeScreenPostDownloadInstrumentedTest {
         }
 
         composeRule.waitUntil(timeoutMillis = 3_000) { viewModel.uiState.value.downloadCompleted }
+        composeRule.onAllNodesWithText("שתף").assertCountEquals(0)
         composeRule.onNodeWithText("הורד עוד אחד").assertIsDisplayed()
         composeRule.onNodeWithText("הורד עוד אחד").performClick()
         composeRule.waitUntil(timeoutMillis = 3_000) { viewModel.uiState.value.url.isEmpty() }
@@ -79,6 +80,7 @@ class HomeScreenPostDownloadInstrumentedTest {
         composeRule.onNodeWithText("ביטול הורדה").performClick()
 
         composeRule.waitUntil(timeoutMillis = 3_000) { !viewModel.uiState.value.isDownloading }
+        composeRule.onAllNodesWithText("שתף").assertCountEquals(0)
         composeRule.onNodeWithText("הורד").assertIsDisplayed()
         composeRule.onNodeWithText("ההורדה בוטלה").assertIsDisplayed()
         composeRule.waitUntil(timeoutMillis = 4_000) { viewModel.uiState.value.downloadMessage == null }

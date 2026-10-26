@@ -61,6 +61,7 @@
     <string name="error_invalid_url">הקישור לא תקין. הדבק קישור מיוטיוב או פייסבוק.</string>
     <string name="error_no_internet">אין חיבור לאינטרנט</string>
     <string name="error_download_failed">ההורדה נכשלה. נסה שוב.</string>
+    <string name="error_share_failed">לא ניתן לשתף את הקובץ. נסה שוב.</string>
     <string name="error_generic">אירעה שגיאה. נסה שוב.</string>
 
     <!-- Notifications -->

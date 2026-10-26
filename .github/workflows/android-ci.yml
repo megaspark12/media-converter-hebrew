@@ -3,6 +3,12 @@ name: Android CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: Run live MP4/MP3 conversion and the app download-button flow
+        type: boolean
+        default: false
 
 jobs:
   build-and-static-checks:
@@ -44,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [26, 29, 34]
+        api-level: [26, 29, 34, 36]
     steps:
       - uses: actions/checkout@v4
       - name: Enable KVM group perms
@@ -65,6 +71,16 @@ jobs:
           disable-animations: true
           emulator-boot-timeout: 900
           script: ./gradlew connectedDebugAndroidTest
+      - name: Live provider smoke test (manual opt-in)
+        if: ${{ inputs.run_live && matrix.api-level == 36 }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.mediaconverter.app.LiveConversionSmokeTest,com.mediaconverter.app.LiveDownloadFlowInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.runLive=true -Pandroid.testInstrumentationRunnerArguments.runLiveFlow=true
       - name: Upload instrumented test reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
