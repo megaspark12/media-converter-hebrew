@@ -102,7 +102,7 @@ class YtDlpMediaExtractor(
     ): File {
         check(tempDirectory.exists() || tempDirectory.mkdirs()) { "Unable to create temporary directory" }
         val template = File(tempDirectory, "source.%(ext)s").absolutePath
-        try {
+        val downloadFailure: Exception? = try {
             runtime.execute(
                 YtDlpCommand(
                     processId = "download-${request.downloadId}-${UUID.randomUUID()}",
@@ -121,18 +121,31 @@ class YtDlpMediaExtractor(
                     },
                 ),
             )
+            null
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            throw ConversionException(
-                ConversionFailureMapper.fromThrowable(failure),
-                failure.message ?: "yt-dlp download failed",
-                failure,
-            )
+            failure
         }
         val outputs = tempDirectory.listFiles()
             .orEmpty()
             .filter { it.isFile && it.name.startsWith("source.") && !it.name.endsWith(".part") }
+        // yt-dlp downloads the separate video and audio streams first and only then runs its own
+        // in-process merge. That merge step is unreliable on some devices (its bundled ffmpeg is
+        // half-detected) and can throw even though both complete streams are already on disk. When
+        // exactly those two MP4 streams are present, FFmpegKit merges them below -- the same path a
+        // clean "ffmpeg not found, keep the files" run already takes -- instead of failing. Any
+        // other failure (no source, a single partial file) is surfaced to the caller as before.
+        val hasSeparateMp4Streams = outputs.size == 2 &&
+            request.outputFormat == OutputFormat.MP4 &&
+            outputs.none { it.length() <= 0L }
+        if (downloadFailure != null && !hasSeparateMp4Streams) {
+            throw ConversionException(
+                ConversionFailureMapper.fromThrowable(downloadFailure),
+                downloadFailure.message ?: "yt-dlp download failed",
+                downloadFailure,
+            )
+        }
         if (outputs.isEmpty() || outputs.any { it.length() <= 0L } || outputs.size > 2 ||
             (outputs.size == 2 && request.outputFormat != OutputFormat.MP4)
         ) {
