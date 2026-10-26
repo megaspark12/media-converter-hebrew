@@ -102,7 +102,7 @@ class YtDlpMediaExtractor(
     ): File {
         check(tempDirectory.exists() || tempDirectory.mkdirs()) { "Unable to create temporary directory" }
         val template = File(tempDirectory, "source.%(ext)s").absolutePath
-        try {
+        val downloadFailure: Exception? = try {
             runtime.execute(
                 YtDlpCommand(
                     processId = "download-${request.downloadId}-${UUID.randomUUID()}",
@@ -121,18 +121,38 @@ class YtDlpMediaExtractor(
                     },
                 ),
             )
+            null
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
-            throw ConversionException(
-                ConversionFailureMapper.fromThrowable(failure),
-                failure.message ?: "yt-dlp download failed",
-                failure,
-            )
+            failure
         }
         val outputs = tempDirectory.listFiles()
             .orEmpty()
-            .filter { it.isFile && it.name.startsWith("source.") && !it.name.endsWith(".part") }
+            .filter {
+                // Only the finished media streams count. yt-dlp also leaves its own sidecar files
+                // next to them -- the `.ytdl` resume record and `.part` / `.part-Frag` fragments --
+                // and an aborted download (e.g. a missing HLS fragment) leaves the sidecar behind,
+                // so counting them would make a single partial file look like two streams to merge.
+                it.isFile && it.name.startsWith("source.") &&
+                    !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.contains(".part-")
+            }
+        // yt-dlp downloads the separate video and audio streams first and only then runs its own
+        // in-process merge. That merge step is unreliable on some devices (its bundled ffmpeg is
+        // half-detected) and can throw even though both complete streams are already on disk. When
+        // exactly those two MP4 streams are present, FFmpegKit merges them below -- the same path a
+        // clean "ffmpeg not found, keep the files" run already takes -- instead of failing. Any
+        // other failure (no source, a single partial file) is surfaced to the caller as before.
+        val hasSeparateMp4Streams = outputs.size == 2 &&
+            request.outputFormat == OutputFormat.MP4 &&
+            outputs.none { it.length() <= 0L }
+        if (downloadFailure != null && !hasSeparateMp4Streams) {
+            throw ConversionException(
+                ConversionFailureMapper.fromThrowable(downloadFailure),
+                downloadFailure.message ?: "yt-dlp download failed",
+                downloadFailure,
+            )
+        }
         if (outputs.isEmpty() || outputs.any { it.length() <= 0L } || outputs.size > 2 ||
             (outputs.size == 2 && request.outputFormat != OutputFormat.MP4)
         ) {
