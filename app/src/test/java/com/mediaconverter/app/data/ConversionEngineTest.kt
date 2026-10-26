@@ -297,6 +297,46 @@ class ConversionEngineTest {
     }
 
     @Test
+    fun ytdlpSidecarFilesAreNotMistakenForASecondStream() = runTest {
+        val directory = Files.createTempDirectory("merge-fallback-sidecar-test").toFile()
+        val runtime = YtDlpRuntime(
+            client = object : YtDlpClient {
+                override suspend fun initialize() = Unit
+                override suspend fun execute(command: YtDlpCommand): YtDlpResult {
+                    // An aborted single-stream download leaves one partial media file plus yt-dlp's
+                    // own resume sidecar. The sidecar must not be counted as a second stream and
+                    // merged; the real yt-dlp failure must surface instead.
+                    File(directory, "source.mp4").writeText("partial video+audio")
+                    File(directory, "source.mp4.ytdl").writeText("{\"resume\":true}")
+                    throw YtDlpException("ERROR: fragment 2 not found, unable to continue")
+                }
+                override suspend fun update() = false
+                override fun cancel(processId: String) = Unit
+                override fun version() = "test"
+            },
+            updateStore = object : YtDlpUpdateStore {
+                override suspend fun readState() = YtDlpUpdateState()
+                override suspend fun writeState(state: YtDlpUpdateState) = Unit
+            },
+        )
+        val extractor = YtDlpMediaExtractor(runtime, MediaSourceMerger { _, _ ->
+            throw AssertionError("The sidecar file must not trigger a merge")
+        })
+        try {
+            val thrown = runCatching {
+                extractor.downloadSource(request(OutputFormat.MP4), directory) { _, _ -> }
+            }.exceptionOrNull()
+            assertTrue("Expected a ConversionException, got $thrown", thrown is ConversionException)
+            assertTrue(
+                "The original yt-dlp failure must surface: ${thrown?.message}",
+                thrown?.message.orEmpty().contains("fragment 2 not found"),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun cancellingNativeMergeStopsItsExecutorAndCleansWithoutPublishing() = runTest {
         val cacheRoot = Files.createTempDirectory("cancel-merge-test").toFile()
         val started = CompletableDeferred<Unit>()

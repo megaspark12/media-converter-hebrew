@@ -129,7 +129,14 @@ class YtDlpMediaExtractor(
         }
         val outputs = tempDirectory.listFiles()
             .orEmpty()
-            .filter { it.isFile && it.name.startsWith("source.") && !it.name.endsWith(".part") }
+            .filter {
+                // Only the finished media streams count. yt-dlp also leaves its own sidecar files
+                // next to them -- the `.ytdl` resume record and `.part` / `.part-Frag` fragments --
+                // and an aborted download (e.g. a missing HLS fragment) leaves the sidecar behind,
+                // so counting them would make a single partial file look like two streams to merge.
+                it.isFile && it.name.startsWith("source.") &&
+                    !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.contains(".part-")
+            }
         // yt-dlp downloads the separate video and audio streams first and only then runs its own
         // in-process merge. That merge step is unreliable on some devices (its bundled ffmpeg is
         // half-detected) and can throw even though both complete streams are already on disk. When
