@@ -165,19 +165,6 @@ fun HomeScreen(
             )
         }
 
-        val completedDownload = uiState.completedDownload
-        if (uiState.downloadCompleted && completedDownload != null) {
-            OutlinedButton(
-                onClick = { openSavedMedia(context, completedDownload) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-            ) {
-                Text(stringResource(R.string.open), style = MaterialTheme.typography.titleMedium)
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
         if (uiState.isDownloading) {
             CircularProgressIndicator(modifier = Modifier.padding(16.dp))
             OutlinedButton(onClick = viewModel::cancelDownload) {
@@ -216,7 +203,15 @@ fun HomeScreen(
                         color = androidx.compose.ui.graphics.Color.White
                     )
                 }
+                // Open and share sit beside the main button so the completed state does not
+                // grow taller than the download state and push its actions below the fold.
                 uiState.completedDownload?.let { download ->
+                    OutlinedButton(
+                        onClick = { openSavedMedia(context, download) },
+                        modifier = Modifier.height(64.dp),
+                    ) {
+                        Text(stringResource(R.string.open))
+                    }
                     OutlinedButton(
                         onClick = { shareDownload(context, download) },
                         modifier = Modifier.height(64.dp),
