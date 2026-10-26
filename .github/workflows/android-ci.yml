@@ -9,6 +9,12 @@ on:
         description: Run live MP4/MP3 conversion and the app download-button flow
         type: boolean
         default: false
+      live_url:
+        # YouTube answers cloud runner IPs with a "confirm you're not a bot" page, so the
+        # default is a short public Facebook video that the downloader can fetch from CI.
+        description: Public video link for the live tests
+        type: string
+        default: https://www.facebook.com/cnn/videos/10155529876156509/
 
 jobs:
   build-and-static-checks:
@@ -80,7 +86,7 @@ jobs:
           target: google_apis
           disable-animations: true
           emulator-boot-timeout: 900
-          script: ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.mediaconverter.app.LiveConversionSmokeTest,com.mediaconverter.app.LiveDownloadFlowInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.runLive=true -Pandroid.testInstrumentationRunnerArguments.runLiveFlow=true
+          script: ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.mediaconverter.app.LiveConversionSmokeTest,com.mediaconverter.app.LiveDownloadFlowInstrumentedTest -Pandroid.testInstrumentationRunnerArguments.runLive=true -Pandroid.testInstrumentationRunnerArguments.runLiveFlow=true -Pandroid.testInstrumentationRunnerArguments.liveUrl=${{ inputs.live_url }}
       - name: Upload instrumented test reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
