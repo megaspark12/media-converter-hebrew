@@ -62,9 +62,6 @@ class DownloadWorker(
     }
 
     companion object {
-        const val KEY_URL = "URL"
-        const val KEY_FORMAT = "FORMAT"
-        const val KEY_QUALITY = "QUALITY"
         const val KEY_DOWNLOAD_ID = "DOWNLOAD_ID"
         private const val MAX_RETRIES = 3
         private const val TAG = "DownloadWorker"
