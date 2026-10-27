@@ -27,14 +27,45 @@ class MediaUrlParserTest {
             "https://youtube.com/watch?v=abc" to SupportedPlatform.YOUTUBE,
             "https://www.youtube.com/shorts/abc" to SupportedPlatform.YOUTUBE,
             "https://music.youtube.com/watch?v=abc" to SupportedPlatform.YOUTUBE,
+            "https://www.youtube.com/live/abc" to SupportedPlatform.YOUTUBE,
+            "https://www.youtube.com/embed/abc" to SupportedPlatform.YOUTUBE,
             "https://fb.watch/abc/" to SupportedPlatform.FACEBOOK,
             "https://www.facebook.com/watch/?v=123" to SupportedPlatform.FACEBOOK,
             "https://mobile.facebook.com/reel/123" to SupportedPlatform.FACEBOOK,
         )
 
         cases.forEach { (url, platform) ->
-            assertEquals(platform, MediaUrlParser.parse(url)?.platform)
+            assertEquals(url, platform, MediaUrlParser.parse(url)?.platform)
         }
+    }
+
+    @Test
+    fun keepsAVideoLinkThatAlsoNamesAPlaylist() {
+        // yt-dlp's --no-playlist picks the video out of such links, so they stay supported.
+        val result = MediaUrlParser.parse("https://www.youtube.com/watch?v=abc&list=PL123&index=4")
+
+        assertEquals(SupportedPlatform.YOUTUBE, result?.platform)
+    }
+
+    @Test
+    fun rejectsYoutubePagesThatAreNotASingleVideo() {
+        // A playlist, channel or search page is not a video: yt-dlp would download every entry
+        // in it, each overwriting the previous one under the fixed output name, and the metadata
+        // lookup would show the playlist title as if it were a video.
+        val cases = listOf(
+            "https://www.youtube.com/playlist?list=PL123",
+            "https://www.youtube.com/channel/UC123",
+            "https://www.youtube.com/@someone",
+            "https://www.youtube.com/c/SomeChannel",
+            "https://www.youtube.com/user/someone",
+            "https://www.youtube.com/feed/subscriptions",
+            "https://www.youtube.com/results?search_query=cats",
+            "https://www.youtube.com/watch?list=PL123",
+            "https://www.youtube.com/",
+            "https://youtu.be/",
+        )
+
+        cases.forEach { value -> assertNull(value, MediaUrlParser.parse(value)) }
     }
 
     @Test

@@ -5,8 +5,10 @@ import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -59,6 +61,20 @@ class DownloadTaskRunner internal constructor(
         val progressLock = Any()
         var lastPersistedProgress = 0
         var lastPersistedAt = dependencies.elapsedRealtime()
+        val progressWrites = mutableListOf<Job>()
+        var acceptingProgress = true
+
+        // Progress is persisted from the extractor's callback thread, so each write runs in its
+        // own child coroutine. The terminal write must land after every one of them: a late
+        // "downloading" write after markRetryPending flipped the row back to its old progress,
+        // hiding the scheduled retry, and the DAO's status guard cannot tell the two apart.
+        suspend fun settleProgressWrites() {
+            val inFlight = synchronized(progressLock) {
+                acceptingProgress = false
+                progressWrites.toList()
+            }
+            inFlight.joinAll()
+        }
         dependencies.log("request=$downloadId platform=${record.platform} phase=start ytDlp=${record.ytDlpVersion}")
         try {
             val source = MediaUrlParser.parse(record.url)
@@ -70,21 +86,20 @@ class DownloadTaskRunner internal constructor(
                 { progress, eta ->
                     onProgress(progress, eta)
                     val now = dependencies.elapsedRealtime()
-                    val persist = synchronized(progressLock) {
-                        if (progress == 100 || progress >= lastPersistedProgress + 5 || now - lastPersistedAt >= 1_000L) {
+                    synchronized(progressLock) {
+                        val due = progress == 100 || progress >= lastPersistedProgress + 5 ||
+                            now - lastPersistedAt >= 1_000L
+                        if (acceptingProgress && due) {
                             lastPersistedProgress = progress
                             lastPersistedAt = now
-                            true
-                        } else {
-                            false
+                            progressWrites.removeAll { it.isCompleted }
+                            progressWrites += launch { repository.updateProgress(downloadId, progress, "downloading") }
                         }
-                    }
-                    if (persist) {
-                        launch { repository.updateProgress(downloadId, progress, "downloading") }
                     }
                 },
             )
             val saved = result.getOrThrow()
+            settleProgressWrites()
             commitPublishedMedia(
                 markCompleted = { repository.markCompleted(downloadId, saved) },
                 deleteSavedMedia = {
@@ -97,6 +112,7 @@ class DownloadTaskRunner internal constructor(
             logTerminal(downloadId, record.platform, record.ytDlpVersion, startedAt, ConversionFailure.CANCELLED.code)
             throw cancelled
         } catch (failure: Exception) {
+            settleProgressWrites()
             val typed = failure as? ConversionException
             val code = typed?.failure ?: ConversionFailure.DOWNLOAD_FAILED
             val transient = code == ConversionFailure.OFFLINE || code == ConversionFailure.DOWNLOAD_FAILED

@@ -2,6 +2,7 @@ package com.mediaconverter.app.data
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import java.util.Locale
 
 data class YtDlpCommand(
     val processId: String,
@@ -17,6 +18,44 @@ data class YtDlpResult(
 )
 
 class YtDlpException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * youtubedl-android reports the ETA as a number of seconds, or -1 when unknown. Shown to the user
+ * as m:ss or h:mm:ss; a bare "754" next to the percentage meant nothing.
+ */
+internal fun formatEtaSeconds(seconds: Long): String {
+    if (seconds < 0L) return ""
+    val hours = seconds / 3_600L
+    val minutes = seconds % 3_600L / 60L
+    val remainder = seconds % 60L
+    return if (hours > 0L) {
+        String.format(Locale.ROOT, "%d:%02d:%02d", hours, minutes, remainder)
+    } else {
+        String.format(Locale.ROOT, "%d:%02d", minutes, remainder)
+    }
+}
+
+/** The version reported by the yt-dlp executable identified by [fingerprint]. */
+internal data class InstalledYtDlpVersion(val fingerprint: String, val version: String)
+
+/**
+ * Answers "which yt-dlp is installed?" without starting a Python interpreter on every cold start.
+ * `yt-dlp --version` costs seconds; the executable's fingerprint (size and modification time)
+ * tells whether the remembered answer still holds. An executable that cannot be fingerprinted
+ * is probed every time, as before.
+ */
+internal suspend fun resolveInstalledYtDlpVersion(
+    fingerprint: String?,
+    remembered: InstalledYtDlpVersion?,
+    probe: suspend () -> String,
+    remember: suspend (InstalledYtDlpVersion) -> Unit,
+): String {
+    if (fingerprint != null && remembered?.fingerprint == fingerprint) return remembered.version
+    val version = probe().trim()
+    check(version.isNotEmpty()) { "Unable to determine the installed yt-dlp version" }
+    if (fingerprint != null) remember(InstalledYtDlpVersion(fingerprint, version))
+    return version
+}
 
 interface YtDlpClient {
     suspend fun initialize()

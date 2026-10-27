@@ -41,7 +41,6 @@ data class DownloadSpec(
 interface DownloadScheduler {
     suspend fun schedule(spec: DownloadSpec): Long
     fun observe(downloadId: Long): Flow<DownloadEntity?>
-    suspend fun retry(downloadId: Long)
     suspend fun cancel(downloadId: Long)
 }
 
@@ -67,12 +66,6 @@ class ApiAwareDownloadScheduler(private val context: Context) : DownloadSchedule
     }
 
     override fun observe(downloadId: Long): Flow<DownloadEntity?> = dao.observeDownloadById(downloadId)
-
-    override suspend fun retry(downloadId: Long) {
-        checkNotNull(dao.getDownloadById(downloadId)) { "Unknown download $downloadId" }
-        dao.resetForRetry(downloadId)
-        dispatch(downloadId)
-    }
 
     override suspend fun cancel(downloadId: Long) {
         when (DownloadBackendSelector.forApi(Build.VERSION.SDK_INT)) {
