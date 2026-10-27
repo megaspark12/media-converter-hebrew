@@ -3,6 +3,9 @@ package com.mediaconverter.app.data
 enum class SupportedPlatform(val value: String) {
     YOUTUBE("youtube"),
     FACEBOOK("facebook"),
+    INSTAGRAM("instagram"),
+    TIKTOK("tiktok"),
+    X("x"),
 }
 
 data class NormalizedMediaUrl(

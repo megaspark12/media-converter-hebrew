@@ -9,7 +9,7 @@ data class DownloadEntity(
     val id: Long = 0,
     val url: String,
     val title: String = "",
-    val platform: String = "unknown", // "youtube", "facebook", "other"
+    val platform: String = "unknown", // SupportedPlatform.value: "youtube", "facebook", "instagram", "tiktok", "x"
     val format: String = "mp4", // "mp4" or "mp3"
     val quality: String = "best",
     val progress: Int = 0,
