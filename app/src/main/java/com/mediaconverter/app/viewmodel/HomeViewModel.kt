@@ -343,8 +343,10 @@ internal fun downloadFailureMessage(errorCode: String): String {
         ConversionFailure.INVALID_URL -> "הקישור אינו נתמך"
         ConversionFailure.OFFLINE -> "אין חיבור לאינטרנט"
         ConversionFailure.LOGIN_REQUIRED -> "הסרטון פרטי או דורש התחברות"
+        ConversionFailure.SITE_BLOCKED -> "האתר חוסם כרגע הורדות מהמכשיר, נסו שוב מאוחר יותר"
         ConversionFailure.PROVIDER_CHANGED -> "האתר השתנה, נסו שוב מאוחר יותר"
         ConversionFailure.NO_COMPATIBLE_FORMAT -> "לא נמצא פורמט מתאים להורדה"
+        ConversionFailure.NO_VIDEO -> "בקישור הזה אין סרטון"
         ConversionFailure.STORAGE_FULL -> "אין מקום באחסון או אין הרשאה לשמור קבצים"
         ConversionFailure.PROCESSING_FAILED -> "ההמרה לא הצליחה, נסו שוב"
         ConversionFailure.DOWNLOAD_FAILED, ConversionFailure.CANCELLED, null -> null
