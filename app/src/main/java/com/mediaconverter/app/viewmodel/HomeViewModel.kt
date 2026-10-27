@@ -8,6 +8,7 @@ import com.mediaconverter.app.data.ConversionFailure
 import com.mediaconverter.app.data.ConversionFailureMapper
 import com.mediaconverter.app.data.DownloadEngine
 import com.mediaconverter.app.data.ApiAwareDownloadScheduler
+import com.mediaconverter.app.data.DownloadScheduler
 import com.mediaconverter.app.data.DownloadSpec
 import com.mediaconverter.app.data.OutputFormat
 import com.mediaconverter.app.data.MediaInfoProvider
@@ -64,8 +65,8 @@ interface DownloadCommand {
     suspend fun cancel(downloadId: Long)
 }
 
-private class SchedulerDownloadCommand(
-    private val scheduler: ApiAwareDownloadScheduler,
+internal class SchedulerDownloadCommand(
+    private val scheduler: DownloadScheduler,
 ) : DownloadCommand {
     override suspend fun start(state: HomeUiState): Long {
         val ready = state.linkState as? LinkUiState.Ready
@@ -77,6 +78,7 @@ private class SchedulerDownloadCommand(
                 quality = state.selectedQuality,
                 title = ready.info.title,
                 thumbnailUrl = ready.info.thumbnailUrl,
+                playlistIndex = ready.info.playlistIndex,
             ),
         )
     }

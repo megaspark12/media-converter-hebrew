@@ -23,6 +23,7 @@ data class DownloadEntity(
     val errorCode: String = "",
     val ytDlpVersion: String = "",
     val retryCount: Int = 0,
+    val playlistIndex: Int = 0, // 1-based item of a carousel or multi-video post; 0 = the link's single video
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
 )

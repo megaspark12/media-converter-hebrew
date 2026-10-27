@@ -26,9 +26,11 @@ class YtDlpRuntimeTest {
         val command = client.commands.single()
         assertTrue(
             command.arguments.containsAll(
-                listOf("--dump-single-json", "--skip-download", "--no-playlist", "--playlist-items", "1"),
+                listOf("--dump-single-json", "--skip-download", "--no-playlist", "--ignore-no-formats-error"),
             ),
         )
+        // Every item of a carousel is described, so the first one with a video can be chosen.
+        assertFalse(command.arguments.contains("--playlist-items"))
         assertEquals("20", command.valueAfter("--socket-timeout"))
         assertEquals("3", command.valueAfter("--retries"))
         assertFalse(command.arguments.contains("--no-check-certificates"))

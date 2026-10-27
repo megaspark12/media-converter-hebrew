@@ -1,5 +1,7 @@
 package com.mediaconverter.app.viewmodel
 
+import com.mediaconverter.app.data.DownloadScheduler
+import com.mediaconverter.app.data.DownloadSpec
 import com.mediaconverter.app.data.MediaInfoProvider
 import com.mediaconverter.app.data.NormalizedMediaUrl
 import com.mediaconverter.app.data.SupportedPlatform
@@ -85,6 +87,33 @@ class HomeViewModelTest {
         listOf("יוטיוב", "פייסבוק", "אינסטגרם", "טיקטוק", "X").forEach { site ->
             assertTrue(site, message.contains(site))
         }
+    }
+
+    @Test
+    fun startPassesTheChosenItemToTheScheduler() = runTest(mainDispatcherRule.dispatcher) {
+        var scheduled: DownloadSpec? = null
+        val scheduler = object : DownloadScheduler {
+            override suspend fun schedule(spec: DownloadSpec): Long {
+                scheduled = spec
+                return 5L
+            }
+            override fun observe(downloadId: Long): Flow<DownloadEntity?> = MutableSharedFlow()
+            override suspend fun cancel(downloadId: Long) {}
+        }
+        val provider = object : MediaInfoProvider {
+            override suspend fun getVideoInfo(url: NormalizedMediaUrl): Result<VideoInfo> =
+                Result.success(VideoInfo("Carousel", "https://img/clip.jpg", 7L, url.platform.value, playlistIndex = 2))
+        }
+        val viewModel = HomeViewModel(provider, SchedulerDownloadCommand(scheduler))
+
+        viewModel.onUrlChange("https://www.instagram.com/p/carousel/")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+
+        assertEquals(2, scheduled?.playlistIndex)
+        assertEquals("Carousel", scheduled?.title)
     }
 
     @Test

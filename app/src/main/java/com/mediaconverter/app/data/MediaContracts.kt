@@ -18,6 +18,8 @@ data class ConversionRequest(
     val source: NormalizedMediaUrl,
     val outputFormat: OutputFormat,
     val quality: String = "best",
+    /** 1-based item of a carousel or multi-video post to download; null for a single video. */
+    val playlistIndex: Int? = null,
 )
 
 enum class OutputFormat(val value: String, val extension: String, val mimeType: String) {
