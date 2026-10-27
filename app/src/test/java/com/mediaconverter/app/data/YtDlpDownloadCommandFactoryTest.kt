@@ -83,6 +83,30 @@ class YtDlpDownloadCommandFactoryTest {
         assertFalse(arguments.contains("--extractor-args"))
     }
 
+    @Test
+    fun downloadsTheChosenItemOfAMultiItemPost() {
+        val request = ConversionRequest(
+            1, NormalizedMediaUrl("https://www.instagram.com/p/carousel/", SupportedPlatform.INSTAGRAM),
+            OutputFormat.MP4, playlistIndex = 2,
+        )
+
+        val arguments = YtDlpDownloadCommandFactory.create(request, "/tmp/source.%(ext)s")
+
+        assertEquals("2", arguments.valueAfter("--playlist-items"))
+        assertTrue(arguments.contains("--no-playlist"))
+    }
+
+    @Test
+    fun aSingleVideoSelectsNoItem() {
+        val request = ConversionRequest(
+            1, NormalizedMediaUrl("https://youtu.be/example", SupportedPlatform.YOUTUBE), OutputFormat.MP4,
+        )
+
+        val arguments = YtDlpDownloadCommandFactory.create(request, "/tmp/source.%(ext)s")
+
+        assertFalse(arguments.contains("--playlist-items"))
+    }
+
     private fun List<String>.valueAfter(option: String): String? =
         indexOf(option).takeIf { it >= 0 }?.let { getOrNull(it + 1) }
 }

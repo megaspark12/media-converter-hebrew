@@ -1,6 +1,7 @@
 package com.mediaconverter.app.viewmodel
 
 import com.mediaconverter.app.data.ConversionFailure
+import com.mediaconverter.app.data.YtDlpException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -24,6 +25,21 @@ class DownloadFailureMessageTest {
         assertTrue(downloadFailureMessage("storage_full").contains("אחסון"))
         assertTrue(downloadFailureMessage("login_required").contains("פרטי"))
         assertTrue(downloadFailureMessage("processing_failed").contains("המרה"))
+        assertTrue(downloadFailureMessage("site_blocked").contains("חוסם"))
+        assertTrue(downloadFailureMessage("no_video").contains("אין סרטון"))
+    }
+
+    @Test
+    fun metadataFailuresShareTheDownloadReasons() {
+        val blocked = metadataFailureMessage(
+            YtDlpException("ERROR: [Instagram] Cabc: You have exceeded the rate-limit for accessing posts anonymously. Use --cookies"),
+        )
+        val walled = metadataFailureMessage(YtDlpException("ERROR: [twitter] 1: NSFW tweet requires authentication"))
+        val unknown = metadataFailureMessage(IllegalStateException("temporary failure"))
+
+        assertTrue(blocked.contains("חוסם"))
+        assertTrue(walled.contains("פרטי"))
+        assertEquals("לא ניתן למצוא מידע על הסרטון", unknown)
     }
 
     @Test

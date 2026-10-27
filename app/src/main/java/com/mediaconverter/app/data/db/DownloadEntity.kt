@@ -9,7 +9,7 @@ data class DownloadEntity(
     val id: Long = 0,
     val url: String,
     val title: String = "",
-    val platform: String = "unknown", // "youtube", "facebook", "other"
+    val platform: String = "unknown", // SupportedPlatform.value: "youtube", "facebook", "instagram", "tiktok", "x"
     val format: String = "mp4", // "mp4" or "mp3"
     val quality: String = "best",
     val progress: Int = 0,
@@ -23,6 +23,7 @@ data class DownloadEntity(
     val errorCode: String = "",
     val ytDlpVersion: String = "",
     val retryCount: Int = 0,
+    val playlistIndex: Int = 0, // 1-based item of a carousel or multi-video post; 0 = the link's single video
     val createdAt: Long = System.currentTimeMillis(),
     val completedAt: Long = 0,
 )

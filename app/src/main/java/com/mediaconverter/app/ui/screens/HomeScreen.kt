@@ -79,7 +79,7 @@ fun HomeScreen(
         )
         
         Text(
-            text = "הורדה קלה ומהירה מיוטיוב ופייסבוק",
+            text = "הורדה קלה ומהירה מיוטיוב, פייסבוק, אינסטגרם, טיקטוק ו-X",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(bottom = 32.dp)

@@ -120,10 +120,15 @@ object YtDlpDownloadCommandFactory {
         // Follow yt-dlp's maintained client defaults, just like metadata requests.
         // MKV accepts the source codecs; the existing transcoder produces MP4.
         // If yt-dlp has no CLI merger, its separate files are merged by FFmpegKit.
+        // An Instagram carousel or a multi-video X post is a playlist to yt-dlp. Without a
+        // selection every item would be downloaded under the same output name, each overwriting
+        // the last. The metadata lookup chose the first item that has a video; that is the one
+        // the user was shown and the one fetched here.
+        val item = request.playlistIndex?.let { listOf("--playlist-items", it.toString()) }.orEmpty()
         return if (request.outputFormat == OutputFormat.MP4) {
-            common + listOf("--merge-output-format", "mkv")
+            common + item + listOf("--merge-output-format", "mkv")
         } else {
-            common
+            common + item
         }
     }
 }

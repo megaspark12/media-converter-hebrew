@@ -22,4 +22,16 @@ class ShareTextParserTest {
         assertNull(ShareTextParser.parse("android.intent.action.VIEW", "text/plain", "https://youtu.be/abc"))
         assertNull(ShareTextParser.parse("android.intent.action.SEND", "image/png", "https://youtu.be/abc"))
     }
+
+    @Test
+    fun findsTheLinkInsideTheTikTokShareSentence() {
+        val result = ShareTextParser.parse(
+            action = "android.intent.action.SEND",
+            mimeType = "text/plain",
+            text = "Check out this video! https://vm.tiktok.com/ZMabc123/.",
+        )
+
+        assertEquals("https://vm.tiktok.com/ZMabc123/", result?.value)
+        assertEquals(SupportedPlatform.TIKTOK, result?.platform)
+    }
 }

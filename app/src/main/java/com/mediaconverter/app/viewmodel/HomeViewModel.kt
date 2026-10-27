@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mediaconverter.app.data.ConversionFailure
+import com.mediaconverter.app.data.ConversionFailureMapper
 import com.mediaconverter.app.data.DownloadEngine
 import com.mediaconverter.app.data.ApiAwareDownloadScheduler
+import com.mediaconverter.app.data.DownloadScheduler
 import com.mediaconverter.app.data.DownloadSpec
 import com.mediaconverter.app.data.OutputFormat
 import com.mediaconverter.app.data.MediaInfoProvider
@@ -51,7 +53,7 @@ data class HomeUiState(
     val videoInfo: VideoInfo? get() = (linkState as? LinkUiState.Ready)?.info
     val error: String?
         get() = when (val state = linkState) {
-            is LinkUiState.Invalid -> "הקישור אינו קישור YouTube או Facebook נתמך"
+            is LinkUiState.Invalid -> "הקישור אינו קישור נתמך מיוטיוב, פייסבוק, אינסטגרם, טיקטוק או X"
             is LinkUiState.Error -> state.message
             else -> null
         }
@@ -63,8 +65,8 @@ interface DownloadCommand {
     suspend fun cancel(downloadId: Long)
 }
 
-private class SchedulerDownloadCommand(
-    private val scheduler: ApiAwareDownloadScheduler,
+internal class SchedulerDownloadCommand(
+    private val scheduler: DownloadScheduler,
 ) : DownloadCommand {
     override suspend fun start(state: HomeUiState): Long {
         val ready = state.linkState as? LinkUiState.Ready
@@ -76,6 +78,7 @@ private class SchedulerDownloadCommand(
                 quality = state.selectedQuality,
                 title = ready.info.title,
                 thumbnailUrl = ready.info.thumbnailUrl,
+                playlistIndex = ready.info.playlistIndex,
             ),
         )
     }
@@ -189,8 +192,9 @@ class HomeViewModel(
                     linkState = LinkUiState.Ready(url, result.getOrThrow()),
                 )
             } else {
+                val failure = result.exceptionOrNull() ?: IllegalStateException("metadata lookup failed")
                 _uiState.value.copy(
-                    linkState = LinkUiState.Error(url, "לא ניתן למצוא מידע על הסרטון"),
+                    linkState = LinkUiState.Error(url, metadataFailureMessage(failure)),
                 )
             }
         } catch (cancelled: CancellationException) {
@@ -332,22 +336,33 @@ class HomeViewModel(
     }
 }
 
+/** The Hebrew reason behind a failure the user can act on; null when only the generic sentence applies. */
+internal fun failureReason(failure: ConversionFailure?): String? = when (failure) {
+    ConversionFailure.INVALID_URL -> "הקישור אינו נתמך"
+    ConversionFailure.OFFLINE -> "אין חיבור לאינטרנט"
+    ConversionFailure.LOGIN_REQUIRED -> "הסרטון פרטי או דורש התחברות"
+    ConversionFailure.SITE_BLOCKED -> "האתר חוסם כרגע הורדות מהמכשיר, נסו שוב מאוחר יותר"
+    ConversionFailure.PROVIDER_CHANGED -> "האתר השתנה, נסו שוב מאוחר יותר"
+    ConversionFailure.NO_COMPATIBLE_FORMAT -> "לא נמצא פורמט מתאים להורדה"
+    ConversionFailure.NO_VIDEO -> "בקישור הזה אין סרטון"
+    ConversionFailure.STORAGE_FULL -> "אין מקום באחסון או אין הרשאה לשמור קבצים"
+    ConversionFailure.PROCESSING_FAILED -> "ההמרה לא הצליחה, נסו שוב"
+    ConversionFailure.DOWNLOAD_FAILED, ConversionFailure.CANCELLED, null -> null
+}
+
 /**
  * Maps a persisted failure code to a Hebrew sentence. The raw `errorMessage` stays in the
  * database for diagnostics; it is English and can carry pages of FFmpeg or yt-dlp output,
  * which is not something to show on the home screen.
  */
 internal fun downloadFailureMessage(errorCode: String): String {
-    val failure = ConversionFailure.entries.firstOrNull { it.code == errorCode }
-    val reason = when (failure) {
-        ConversionFailure.INVALID_URL -> "הקישור אינו נתמך"
-        ConversionFailure.OFFLINE -> "אין חיבור לאינטרנט"
-        ConversionFailure.LOGIN_REQUIRED -> "הסרטון פרטי או דורש התחברות"
-        ConversionFailure.PROVIDER_CHANGED -> "האתר השתנה, נסו שוב מאוחר יותר"
-        ConversionFailure.NO_COMPATIBLE_FORMAT -> "לא נמצא פורמט מתאים להורדה"
-        ConversionFailure.STORAGE_FULL -> "אין מקום באחסון או אין הרשאה לשמור קבצים"
-        ConversionFailure.PROCESSING_FAILED -> "ההמרה לא הצליחה, נסו שוב"
-        ConversionFailure.DOWNLOAD_FAILED, ConversionFailure.CANCELLED, null -> null
-    }
+    val reason = failureReason(ConversionFailure.entries.firstOrNull { it.code == errorCode })
     return if (reason == null) "ההורדה נכשלה. נסו שוב" else "ההורדה נכשלה: $reason"
 }
+
+/**
+ * The home screen's metadata error. The lookup runs the same extractor as the download, so a
+ * site's refusal is explained the same way; anything else gets the generic sentence.
+ */
+internal fun metadataFailureMessage(failure: Throwable): String =
+    failureReason(ConversionFailureMapper.fromThrowable(failure)) ?: "לא ניתן למצוא מידע על הסרטון"

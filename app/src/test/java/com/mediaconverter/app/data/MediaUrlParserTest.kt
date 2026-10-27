@@ -75,6 +75,9 @@ class MediaUrlParserTest {
             "https://evil.example/?next=https://youtube.com/watch?v=abc",
             "javascript:https://youtu.be/abc",
             "https://vimeo.com/123",
+            "https://tiktok.com.evil.example/@a/video/1",
+            "https://x.com.evil.example/a/status/1",
+            "https://instagram.com.evil.example/p/abc",
         )
 
         cases.forEach { value -> assertNull(value, MediaUrlParser.parse(value)) }
@@ -85,5 +88,71 @@ class MediaUrlParserTest {
         val result = MediaUrlParser.parse("Watch this: (https://www.facebook.com/reel/12345).")
 
         assertEquals("https://www.facebook.com/reel/12345", result?.value)
+    }
+
+    @Test
+    fun supportsInstagramTikTokAndXHostVariants() {
+        val cases = mapOf(
+            "https://www.instagram.com/reel/Chunk8-jurw/" to SupportedPlatform.INSTAGRAM,
+            "https://instagram.com/p/aye83DjauH/?igsh=abc" to SupportedPlatform.INSTAGRAM,
+            "https://www.instagram.com/tv/BkfuX9UB-eK/" to SupportedPlatform.INSTAGRAM,
+            "https://www.instagram.com/reels/Cop84x6u7CP/" to SupportedPlatform.INSTAGRAM,
+            "https://www.instagram.com/marvelskies.fc/reel/CWqAgUZgCku/" to SupportedPlatform.INSTAGRAM,
+            "https://www.instagram.com/share/reel/_abc123" to SupportedPlatform.INSTAGRAM,
+            "https://instagr.am/p/aye83DjauH/" to SupportedPlatform.INSTAGRAM,
+            "https://www.tiktok.com/@hankgreen1/video/7047596209028074758" to SupportedPlatform.TIKTOK,
+            "https://www.tiktok.com/@/video/7668090902816017671/" to SupportedPlatform.TIKTOK,
+            "https://www.tiktok.com/t/ZTRC5xgJp" to SupportedPlatform.TIKTOK,
+            "https://vm.tiktok.com/ZTR45GpSF/?utm_source=copy" to SupportedPlatform.TIKTOK,
+            "https://vt.tiktok.com/ZSe4FqkKd" to SupportedPlatform.TIKTOK,
+            "https://www.tiktok.com/share/video/7668090902816017671/" to SupportedPlatform.TIKTOK,
+            "https://www.tiktokv.com/share/video/7668090902816017671/" to SupportedPlatform.TIKTOK,
+            "https://www.tiktok.com/embed/7047596209028074758" to SupportedPlatform.TIKTOK,
+            "https://x.com/CBSNews/status/1813930232880697601?s=46&t=abc" to SupportedPlatform.X,
+            "https://twitter.com/starwars/status/665052190608723968" to SupportedPlatform.X,
+            "https://mobile.twitter.com/i/web/status/910031516746514432" to SupportedPlatform.X,
+            "https://x.com/i/status/1813930232880697601" to SupportedPlatform.X,
+            "https://x.com/statuses/665052190608723968" to SupportedPlatform.X,
+        )
+
+        cases.forEach { (url, platform) ->
+            assertEquals(url, platform, MediaUrlParser.parse(url)?.platform)
+        }
+    }
+
+    @Test
+    fun keepsTheVideoIndexOfAMultiVideoPost() {
+        val result = MediaUrlParser.parse("https://x.com/user/status/1813930232880697601/video/2")
+
+        assertEquals("https://x.com/user/status/1813930232880697601/video/2", result?.value)
+        assertEquals(SupportedPlatform.X, result?.platform)
+    }
+
+    @Test
+    fun rejectsSocialPagesThatAreNotASinglePost() {
+        val cases = listOf(
+            "https://www.instagram.com/porsche/",
+            "https://www.instagram.com/explore/tags/lolcats/",
+            "https://www.instagram.com/stories/fruits_zipper/3570766765028588805/",
+            "https://www.instagram.com/reels/audio/123/",
+            "https://www.instagram.com/share/",
+            "https://www.instagram.com/",
+            "https://www.tiktok.com/@hankgreen1",
+            "https://www.tiktok.com/@hankgreen1/photo/7047596209028074758",
+            "https://www.tiktok.com/@hankgreen1/live",
+            "https://www.tiktok.com/tag/funny",
+            "https://www.tiktok.com/music/original-sound-123",
+            "https://vm.tiktok.com/",
+            "https://x.com/CBSNews",
+            "https://x.com/home",
+            "https://x.com/search?q=cats",
+            "https://x.com/i/spaces/1OwxWwQDWvzxQ",
+            "https://x.com/i/broadcasts/1abc",
+            "https://x.com/CBSNews/status/",
+            "https://x.com/CBSNews/status/not-a-number",
+            "https://t.co/abc123",
+        )
+
+        cases.forEach { value -> assertNull(value, MediaUrlParser.parse(value)) }
     }
 }

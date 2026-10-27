@@ -1,9 +1,12 @@
 package com.mediaconverter.app.viewmodel
 
+import com.mediaconverter.app.data.DownloadScheduler
+import com.mediaconverter.app.data.DownloadSpec
 import com.mediaconverter.app.data.MediaInfoProvider
 import com.mediaconverter.app.data.NormalizedMediaUrl
 import com.mediaconverter.app.data.SupportedPlatform
 import com.mediaconverter.app.data.VideoInfo
+import com.mediaconverter.app.data.YtDlpException
 import com.mediaconverter.app.data.db.DownloadEntity
 import com.mediaconverter.app.test.MainDispatcherRule
 import kotlinx.coroutines.CancellationException
@@ -71,6 +74,46 @@ class HomeViewModelTest {
 
         assertTrue(viewModel.uiState.value.linkState is LinkUiState.Invalid)
         assertTrue(provider.requestedUrls.isEmpty())
+    }
+
+    @Test
+    fun invalidLinkMessageNamesEverySupportedSite() = runTest(mainDispatcherRule.dispatcher) {
+        val viewModel = HomeViewModel(FakeMediaInfoProvider())
+
+        viewModel.onUrlChange("https://vimeo.com/123")
+        advanceUntilIdle()
+
+        val message = viewModel.uiState.value.error.orEmpty()
+        listOf("יוטיוב", "פייסבוק", "אינסטגרם", "טיקטוק", "X").forEach { site ->
+            assertTrue(site, message.contains(site))
+        }
+    }
+
+    @Test
+    fun startPassesTheChosenItemToTheScheduler() = runTest(mainDispatcherRule.dispatcher) {
+        var scheduled: DownloadSpec? = null
+        val scheduler = object : DownloadScheduler {
+            override suspend fun schedule(spec: DownloadSpec): Long {
+                scheduled = spec
+                return 5L
+            }
+            override fun observe(downloadId: Long): Flow<DownloadEntity?> = MutableSharedFlow()
+            override suspend fun cancel(downloadId: Long) {}
+        }
+        val provider = object : MediaInfoProvider {
+            override suspend fun getVideoInfo(url: NormalizedMediaUrl): Result<VideoInfo> =
+                Result.success(VideoInfo("Carousel", "https://img/clip.jpg", 7L, url.platform.value, playlistIndex = 2))
+        }
+        val viewModel = HomeViewModel(provider, SchedulerDownloadCommand(scheduler))
+
+        viewModel.onUrlChange("https://www.instagram.com/p/carousel/")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+        viewModel.startDownload()
+        runCurrent()
+
+        assertEquals(2, scheduled?.playlistIndex)
+        assertEquals("Carousel", scheduled?.title)
     }
 
     @Test
@@ -226,6 +269,22 @@ class HomeViewModelTest {
         viewModel.startDownload()
         runCurrent()
         assertEquals(8L, viewModel.uiState.value.activeDownloadId)
+    }
+
+    @Test
+    fun metadataFailureExplainsTheReasonInHebrew() = runTest(mainDispatcherRule.dispatcher) {
+        val provider = object : MediaInfoProvider {
+            override suspend fun getVideoInfo(url: NormalizedMediaUrl): Result<VideoInfo> =
+                Result.failure(YtDlpException("ERROR: [Instagram] Cabc: There is no video in this post"))
+        }
+        val viewModel = HomeViewModel(provider)
+
+        viewModel.onUrlChange("https://www.instagram.com/p/Cabc/")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+
+        val error = viewModel.uiState.value.linkState as LinkUiState.Error
+        assertEquals("בקישור הזה אין סרטון", error.message)
     }
 
     @Test

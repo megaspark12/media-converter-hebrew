@@ -36,6 +36,20 @@ data class DownloadSpec(
     val quality: String,
     val title: String,
     val thumbnailUrl: String,
+    /** 1-based item of a carousel or multi-video post to download; null for a single video. */
+    val playlistIndex: Int? = null,
+)
+
+internal fun DownloadSpec.toEntity(ytDlpVersion: String): DownloadEntity = DownloadEntity(
+    url = source.value,
+    title = title,
+    platform = source.platform.value,
+    format = outputFormat.value,
+    quality = quality,
+    thumbnailUrl = thumbnailUrl,
+    status = "pending",
+    ytDlpVersion = ytDlpVersion,
+    playlistIndex = playlistIndex ?: 0,
 )
 
 interface DownloadScheduler {
@@ -50,16 +64,7 @@ class ApiAwareDownloadScheduler(private val context: Context) : DownloadSchedule
 
     override suspend fun schedule(spec: DownloadSpec): Long {
         val downloadId = dao.insertDownload(
-            DownloadEntity(
-                url = spec.source.value,
-                title = spec.title,
-                platform = spec.source.platform.value,
-                format = spec.outputFormat.value,
-                quality = spec.quality,
-                thumbnailUrl = spec.thumbnailUrl,
-                status = "pending",
-                ytDlpVersion = YoutubeDlVersionReader.version(context).orEmpty(),
-            ),
+            spec.toEntity(ytDlpVersion = YoutubeDlVersionReader.version(context).orEmpty()),
         )
         dispatch(downloadId)
         return downloadId

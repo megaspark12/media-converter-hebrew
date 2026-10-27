@@ -79,6 +79,44 @@ class DownloadTaskRunnerTest {
         assertEquals(saved, result.savedMedia)
     }
     @Test
+    fun theChosenItemOfAMultiItemPostReachesTheConversion() = runTest {
+        var request: ConversionRequest? = null
+        val saved = SavedMedia("content://media/external/downloads/9", "clip.mp4", "video/mp4", 10, 1_000)
+        val runner = DownloadTaskRunner(
+            DownloadTaskDependencies(
+                repository = FakeDownloadTaskStore(playlistIndex = 2),
+                convert = { conversion, _, _ -> request = conversion; Result.success(saved) },
+                deleteSavedMedia = {},
+                elapsedRealtime = { 0L },
+                log = {},
+            ),
+        )
+
+        runner.run(42) { _, _ -> }
+
+        assertEquals(2, request?.playlistIndex)
+    }
+
+    @Test
+    fun aSingleVideoRecordSelectsNoItem() = runTest {
+        var request: ConversionRequest? = null
+        val saved = SavedMedia("content://media/external/downloads/9", "clip.mp4", "video/mp4", 10, 1_000)
+        val runner = DownloadTaskRunner(
+            DownloadTaskDependencies(
+                repository = FakeDownloadTaskStore(),
+                convert = { conversion, _, _ -> request = conversion; Result.success(saved) },
+                deleteSavedMedia = {},
+                elapsedRealtime = { 0L },
+                log = {},
+            ),
+        )
+
+        runner.run(42) { _, _ -> }
+
+        assertEquals(null, request?.playlistIndex)
+    }
+
+    @Test
     fun aLateProgressWriteCannotOverwriteTheRetryDecision() = runTest {
         // Progress writes were launched and forgotten. One still in flight when the download
         // failed landed after markRetryPending and flipped the row back to "downloading" at the
@@ -142,11 +180,12 @@ private class StatefulDownloadTaskStore(private val progressWriteDelayMillis: Lo
     }
 }
 
-private class FakeDownloadTaskStore : DownloadTaskStore {
+private class FakeDownloadTaskStore(private val playlistIndex: Int = 0) : DownloadTaskStore {
     override suspend fun getDownloadById(id: Long) = DownloadEntity(
         id = id,
         url = "https://youtu.be/test",
         status = "pending",
+        playlistIndex = playlistIndex,
     )
 
     override suspend fun updateProgress(id: Long, progress: Int, status: String) = 1

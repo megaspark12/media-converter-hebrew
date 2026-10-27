@@ -81,7 +81,10 @@ class DownloadTaskRunner internal constructor(
                 ?: throw ConversionException(ConversionFailure.INVALID_URL, "Unsupported media URL")
             val format = OutputFormat.entries.firstOrNull { it.value == record.format } ?: OutputFormat.MP4
             val result = dependencies.convert(
-                ConversionRequest(downloadId, source, format, record.quality),
+                ConversionRequest(
+                    downloadId, source, format, record.quality,
+                    playlistIndex = record.playlistIndex.takeIf { it > 0 },
+                ),
                 "${record.title}-$downloadId",
                 { progress, eta ->
                     onProgress(progress, eta)

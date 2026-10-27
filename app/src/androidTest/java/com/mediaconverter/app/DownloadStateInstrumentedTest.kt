@@ -79,7 +79,7 @@ class DownloadStateInstrumentedTest {
         helper.close()
 
         val migrated = Room.databaseBuilder(context, AppDatabase::class.java, name)
-            .addMigrations(AppDatabase.MIGRATION_1_2)
+            .addMigrations(*AppDatabase.MIGRATIONS)
             .build()
         try {
             val row = migrated.downloadDao().getDownloadById(1)
@@ -88,6 +88,7 @@ class DownloadStateInstrumentedTest {
             assertEquals("", row?.outputUri)
             assertEquals("", row?.errorCode)
             assertEquals(0, row?.retryCount)
+            assertEquals(0, row?.playlistIndex)
         } finally {
             migrated.close()
             context.deleteDatabase(name)
