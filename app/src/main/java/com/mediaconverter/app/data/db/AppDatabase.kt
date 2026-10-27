@@ -7,11 +7,14 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [DownloadEntity::class], version = 3, exportSchema = false)
+@Database(entities = [DownloadEntity::class], version = AppDatabase.SCHEMA_VERSION, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun downloadDao(): DownloadDao
 
     companion object {
+        /** Bump together with a new step in [MIGRATIONS]; MigrationChainTest ties the two. */
+        const val SCHEMA_VERSION = 3
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -24,7 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "media_converter_db"
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { INSTANCE = it }
+                ).addMigrations(*MIGRATIONS).build().also { INSTANCE = it }
             }
         }
 
@@ -43,5 +46,12 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE downloads ADD COLUMN playlistIndex INTEGER NOT NULL DEFAULT 0")
             }
         }
+
+        /**
+         * Every step from version 1 to the current one, in order. The only list: the builder
+         * above and the migration test both read it, so a schema bump cannot add its step to one
+         * and not the other (MigrationChainTest checks the chain is unbroken).
+         */
+        val MIGRATIONS: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
     }
 }
