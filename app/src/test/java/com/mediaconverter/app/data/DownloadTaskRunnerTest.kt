@@ -1,6 +1,7 @@
 package com.mediaconverter.app.data
 
 import com.mediaconverter.app.data.db.DownloadEntity
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -76,6 +77,68 @@ class DownloadTaskRunnerTest {
 
         assertTrue(result.succeeded)
         assertEquals(saved, result.savedMedia)
+    }
+    @Test
+    fun aLateProgressWriteCannotOverwriteTheRetryDecision() = runTest {
+        // Progress writes were launched and forgotten. One still in flight when the download
+        // failed landed after markRetryPending and flipped the row back to "downloading" at the
+        // old progress, so the scheduled retry never showed and the row looked stuck.
+        val store = StatefulDownloadTaskStore(progressWriteDelayMillis = 100)
+        val runner = DownloadTaskRunner(
+            DownloadTaskDependencies(
+                repository = store,
+                convert = { _, _, onProgress ->
+                    onProgress(50, "")
+                    Result.failure(ConversionException(ConversionFailure.DOWNLOAD_FAILED, "disconnect"))
+                },
+                deleteSavedMedia = {},
+                elapsedRealtime = { 0L },
+                log = {},
+            ),
+        )
+
+        val result = runner.run(42) { _, _ -> }
+
+        assertTrue(result.shouldRetry)
+        assertEquals("pending", store.status)
+        assertEquals(1, store.retryCount)
+    }
+}
+
+private class StatefulDownloadTaskStore(private val progressWriteDelayMillis: Long) : DownloadTaskStore {
+    var status = "pending"
+    var progress = 0
+    var retryCount = 0
+
+    override suspend fun getDownloadById(id: Long) = DownloadEntity(
+        id = id,
+        url = "https://youtu.be/test",
+        status = status,
+        retryCount = retryCount,
+    )
+
+    override suspend fun updateProgress(id: Long, progress: Int, status: String): Int {
+        delay(progressWriteDelayMillis)
+        return whileActive {
+            this.progress = progress
+            this.status = status
+        }
+    }
+
+    override suspend fun markFailed(id: Long, error: String, errorCode: String) = whileActive { status = "failed" }
+
+    override suspend fun markRetryPending(id: Long, error: String, errorCode: String) = whileActive {
+        status = "pending"
+        retryCount++
+    }
+
+    override suspend fun markCompleted(id: Long, savedMedia: SavedMedia) = whileActive { status = "completed" }
+
+    /** Mirrors the DAO guards: terminal rows are never touched again. */
+    private inline fun whileActive(update: () -> Unit): Int {
+        if (status !in setOf("pending", "downloading")) return 0
+        update()
+        return 1
     }
 }
 
