@@ -1,0 +1,59 @@
+name: Release on tag
+
+# Pushing any tag builds the installable (debug-signed) APK and publishes it as a GitHub
+# release named after the tag, so a build can be fetched straight from the Releases page,
+# including from a phone's browser. The workflow file must exist on the tagged commit.
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      # Optional. Without it every run signs with a freshly generated debug key, and Android
+      # refuses to install one build over another ("App not installed") until the previous one
+      # is uninstalled. Store a debug keystore as base64 in this repository secret and every
+      # release installs over the previous one:
+      #   keytool -genkeypair -keystore debug.keystore -alias androiddebugkey \
+      #     -storepass android -keypass android -keyalg RSA -validity 10000 \
+      #     -dname "CN=Android Debug,O=Android,C=US"
+      #   base64 -w0 debug.keystore   # paste the output as DEBUG_KEYSTORE_BASE64
+      DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v4
+      - name: Use the shared debug signing key when configured
+        if: env.DEBUG_KEYSTORE_BASE64 != ''
+        run: |
+          mkdir -p ~/.android
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
+      - name: Build the installable APK
+        run: ./gradlew assembleDebug
+      - name: Verify 16 KB APK alignment
+        run: "$ANDROID_HOME/build-tools/36.0.0/zipalign -c -P 16 -v 4 app/build/outputs/apk/debug/app-debug.apk"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          apk="media-converter-$tag.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          notes="Debug-signed build of commit ${GITHUB_SHA::7} for installing on a phone."
+          if [ -z "$DEBUG_KEYSTORE_BASE64" ]; then
+            notes="$notes Signed with a one-off key: uninstall the previous build before installing this one."
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            # A re-run of the same tag replaces the asset instead of failing.
+            gh release upload "$tag" "$apk" --clobber
+          else
+            gh release create "$tag" "$apk" --title "$tag" --notes "$notes" --generate-notes
+          fi
