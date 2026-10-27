@@ -83,6 +83,18 @@ class YtDlpDownloadCommandFactoryTest {
         assertFalse(arguments.contains("--extractor-args"))
     }
 
+    @Test
+    fun downloadsOnlyTheFirstItemOfAMultiItemPost() {
+        val request = ConversionRequest(
+            1, NormalizedMediaUrl("https://www.instagram.com/p/carousel/", SupportedPlatform.INSTAGRAM), OutputFormat.MP4,
+        )
+
+        val arguments = YtDlpDownloadCommandFactory.create(request, "/tmp/source.%(ext)s")
+
+        assertEquals("1", arguments.valueAfter("--playlist-items"))
+        assertTrue(arguments.contains("--no-playlist"))
+    }
+
     private fun List<String>.valueAfter(option: String): String? =
         indexOf(option).takeIf { it >= 0 }?.let { getOrNull(it + 1) }
 }

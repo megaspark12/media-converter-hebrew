@@ -98,6 +98,9 @@ class YtDlpRuntime(
                 "--dump-single-json",
                 "--skip-download",
                 "--no-playlist",
+                // An Instagram carousel or a multi-video X post is a playlist to yt-dlp; the
+                // app fetches its first item, so describe only that one.
+                "--playlist-items", "1",
                 "--socket-timeout", "20",
                 "--retries", "3",
             ),

@@ -12,6 +12,27 @@ data class VideoInfo(
     val platform: String,
 )
 
+/**
+ * Reads yt-dlp's `--dump-single-json` output. A carousel or a post with several videos comes back
+ * as a playlist object whose own fields are sparse; the first entry (the only one, with
+ * `--playlist-items 1`) then supplies what the top level lacks.
+ */
+internal fun parseVideoInfo(stdout: String, platform: SupportedPlatform): VideoInfo {
+    val json = JSONObject(stdout)
+    val entry = json.optJSONArray("entries")?.optJSONObject(0)
+    fun text(name: String): String =
+        json.optString(name).ifBlank { entry?.optString(name).orEmpty() }
+    val duration = json.optLong("duration", 0L).takeIf { it > 0L }
+        ?: entry?.optLong("duration", 0L)
+        ?: 0L
+    return VideoInfo(
+        title = text("title").ifBlank { "סרטון" },
+        thumbnailUrl = text("thumbnail"),
+        duration = duration,
+        platform = platform.value,
+    )
+}
+
 class DownloadEngine(
     context: Context,
     private val ytDlpRuntime: YtDlpRuntime = YtDlpRuntimeProvider.get(context),
@@ -19,15 +40,7 @@ class DownloadEngine(
 
     override suspend fun getVideoInfo(url: NormalizedMediaUrl): Result<VideoInfo> = try {
         val response = ytDlpRuntime.metadata(url, "metadata-${UUID.randomUUID()}")
-        val json = JSONObject(response.stdout)
-        Result.success(
-            VideoInfo(
-                title = json.optString("title", "סרטון"),
-                thumbnailUrl = json.optString("thumbnail", ""),
-                duration = json.optLong("duration", 0L),
-                platform = url.platform.value,
-            ),
-        )
+        Result.success(parseVideoInfo(response.stdout, url.platform))
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Exception) {

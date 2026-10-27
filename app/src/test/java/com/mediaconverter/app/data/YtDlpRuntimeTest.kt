@@ -24,7 +24,11 @@ class YtDlpRuntimeTest {
         runtime.metadata(NormalizedMediaUrl("https://youtu.be/abc", SupportedPlatform.YOUTUBE), "request-1")
 
         val command = client.commands.single()
-        assertTrue(command.arguments.containsAll(listOf("--dump-single-json", "--skip-download", "--no-playlist")))
+        assertTrue(
+            command.arguments.containsAll(
+                listOf("--dump-single-json", "--skip-download", "--no-playlist", "--playlist-items", "1"),
+            ),
+        )
         assertEquals("20", command.valueAfter("--socket-timeout"))
         assertEquals("3", command.valueAfter("--retries"))
         assertFalse(command.arguments.contains("--no-check-certificates"))

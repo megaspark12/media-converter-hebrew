@@ -109,6 +109,10 @@ object YtDlpDownloadCommandFactory {
         // its completeness marker; with --no-part an interrupted stream looked finished.
         val common = listOf(
             "--no-playlist",
+            // An Instagram carousel or a multi-video X post is a playlist to yt-dlp. Without a
+            // limit every item would be downloaded under the same output name, each overwriting
+            // the last; the first item is the one the user is shown and gets.
+            "--playlist-items", "1",
             "--socket-timeout", "20",
             "--retries", "3",
             "--fragment-retries", "3",
