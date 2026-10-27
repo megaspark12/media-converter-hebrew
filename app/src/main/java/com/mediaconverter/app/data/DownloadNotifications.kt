@@ -40,10 +40,11 @@ class DownloadNotifications(private val context: Context) {
 
     fun foreground(downloadId: Long, title: String, progress: Int, eta: String): ForegroundInfo {
         val notification = ongoing(downloadId, title, progress, eta)
+        val slot = progressSlot(downloadId)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(notificationId(downloadId), notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            ForegroundInfo(slot.id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         } else {
-            ForegroundInfo(notificationId(downloadId), notification)
+            ForegroundInfo(slot.id, notification)
         }
     }
 
@@ -53,7 +54,8 @@ class DownloadNotifications(private val context: Context) {
      * leave a notification the user cannot swipe away.
      */
     fun notifyProgress(downloadId: Long, title: String, progress: Int, eta: String) {
-        manager.notify(notificationId(downloadId), progress(downloadId, title, progress, eta).build())
+        val slot = progressSlot(downloadId)
+        manager.notify(slot.tag, slot.id, progress(downloadId, title, progress, eta).build())
     }
 
     fun showComplete(downloadId: Long, savedMedia: SavedMedia? = null) {
@@ -66,12 +68,12 @@ class DownloadNotifications(private val context: Context) {
                 .setContentText(savedMedia.displayName)
                 .setContentIntent(openIntent(downloadId, savedMedia))
         }
-        manager.notify(notificationId(downloadId), builder.build())
+        showResult(downloadId, builder.build())
     }
 
     fun showFailed(downloadId: Long) {
-        manager.notify(
-            notificationId(downloadId),
+        showResult(
+            downloadId,
             NotificationCompat.Builder(context, CHANNEL_ID)
                 .setContentTitle("ההורדה נכשלה")
                 .setSmallIcon(android.R.drawable.stat_notify_error)
@@ -80,8 +82,27 @@ class DownloadNotifications(private val context: Context) {
         )
     }
 
+    /**
+     * Replaces the progress notice with the result. The progress notice is taken down here
+     * explicitly: the Android 14+ job detaches it when the job ends, and on Android 8-13
+     * WorkManager cancels it by its bare id as soon as the worker returns, which also removed a
+     * result posted under that same id. Results therefore live in a slot of their own.
+     */
+    private fun showResult(downloadId: Long, result: Notification) {
+        val progress = progressSlot(downloadId)
+        manager.cancel(progress.tag, progress.id)
+        val slot = resultSlot(downloadId)
+        manager.notify(slot.tag, slot.id, result)
+    }
+
     fun cancel(downloadId: Long) {
-        manager.cancel(notificationId(downloadId))
+        listOf(progressSlot(downloadId), resultSlot(downloadId)).forEach { manager.cancel(it.tag, it.id) }
+    }
+
+    internal fun outcomePresenter(downloadId: Long): DownloadOutcomePresenter = object : DownloadOutcomePresenter {
+        override fun showComplete(savedMedia: SavedMedia?) = showComplete(downloadId, savedMedia)
+        override fun showFailed() = showFailed(downloadId)
+        override fun dismissProgress() = cancel(downloadId)
     }
 
     private fun openIntent(downloadId: Long, savedMedia: SavedMedia): PendingIntent {
@@ -109,7 +130,17 @@ class DownloadNotifications(private val context: Context) {
 
     companion object {
         const val CHANNEL_ID = "downloads_channel"
+        private const val RESULT_TAG = "result"
+
         fun notificationId(downloadId: Long): Int =
             (downloadId % (Int.MAX_VALUE - 1)).toInt() + 1
+
+        /** The in-progress notice, under the bare id the foreground service and the job own. */
+        internal fun progressSlot(downloadId: Long) = NotificationSlot(tag = null, id = notificationId(downloadId))
+
+        /** The completion or failure notice, which must outlive the service that ran the download. */
+        internal fun resultSlot(downloadId: Long) = NotificationSlot(tag = RESULT_TAG, id = notificationId(downloadId))
     }
 }
+
+internal data class NotificationSlot(val tag: String?, val id: Int)

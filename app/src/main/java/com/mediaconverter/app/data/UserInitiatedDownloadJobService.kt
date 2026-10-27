@@ -2,7 +2,7 @@ package com.mediaconverter.app.data
 
 import android.app.job.JobParameters
 import android.app.job.JobService
-import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -25,30 +25,29 @@ class UserInitiatedDownloadJobService : JobService() {
         val downloadId = params.extras.getLong(ApiAwareDownloadScheduler.EXTRA_DOWNLOAD_ID, -1L)
         if (downloadId <= 0) return false
         val notifications = DownloadNotifications(this).also { it.createChannel() }
-        setNotification(
+        fun showProgress(progress: Int, eta: String) = setNotification(
             params,
-            DownloadNotifications.notificationId(downloadId),
-            notifications.ongoing(downloadId, "מוריד מדיה", 0, ""),
+            DownloadNotifications.progressSlot(downloadId).id,
+            notifications.ongoing(downloadId, TITLE, progress, eta),
             JOB_END_NOTIFICATION_POLICY_DETACH,
         )
+        showProgress(0, "")
         jobs[params.jobId] = scope.launch {
             try {
-                val outcome = DownloadTaskRunner(this@UserInitiatedDownloadJobService).run(downloadId) { progress, eta ->
-                    if (progress == 100 || progress % 5 == 0) {
-                        setNotification(
-                            params,
-                            DownloadNotifications.notificationId(downloadId),
-                            notifications.ongoing(downloadId, "מוריד מדיה", progress, eta),
-                            JOB_END_NOTIFICATION_POLICY_DETACH,
-                        )
-                    }
-                }
-                when {
-                    outcome.succeeded -> notifications.showComplete(downloadId, outcome.savedMedia)
-                    outcome.shouldRetry -> notifications.cancel(downloadId)
-                    else -> notifications.showFailed(downloadId)
-                }
-                jobFinished(params, outcome.shouldRetry)
+                val disposition = runDownloadAttempt(
+                    canRetry = true,
+                    attempt = {
+                        DownloadTaskRunner(this@UserInitiatedDownloadJobService).run(downloadId) { progress, eta ->
+                            if (shouldPostProgress(progress)) showProgress(progress, eta)
+                        }
+                    },
+                    markFailed = { error, code ->
+                        DownloadRepository(this@UserInitiatedDownloadJobService).markFailed(downloadId, error, code)
+                    },
+                    presenter = notifications.outcomePresenter(downloadId),
+                    log = { message, failure -> Log.w(TAG, message, failure) },
+                )
+                jobFinished(params, disposition == DownloadDisposition.RETRY)
             } catch (cancelled: CancellationException) {
                 val disposition = stopDispositions.remove(params.jobId)
                     ?: StopDisposition(downloadId, shouldRetry = true, stopReason = -1)
@@ -102,4 +101,9 @@ class UserInitiatedDownloadJobService : JobService() {
         val shouldRetry: Boolean,
         val stopReason: Int,
     )
+
+    private companion object {
+        const val TAG = "DownloadJobService"
+        const val TITLE = "מוריד מדיה"
+    }
 }

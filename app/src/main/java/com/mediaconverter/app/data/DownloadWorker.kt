@@ -20,71 +20,44 @@ class DownloadWorker(
     override suspend fun doWork(): Result {
         val downloadId = inputData.getLong(KEY_DOWNLOAD_ID, -1L)
         if (downloadId <= 0) return Result.failure()
-        return try {
-            notifications.createChannel()
-            val foreground = promoteToForeground(
-                setForeground = { setForeground(notifications.foreground(downloadId, TITLE, 0, "")) },
-                logFailure = { Log.w(TAG, "Download $downloadId continues without a foreground service", it) },
-            )
-            val outcome = runner.run(downloadId) { progress, eta ->
-                if (progress == 100 || progress % 5 == 0) {
-                    if (foreground) {
-                        setForegroundAsync(notifications.foreground(downloadId, TITLE, progress, eta))
-                    } else {
-                        notifications.notifyProgress(downloadId, TITLE, progress, eta)
-                    }
-                }
-            }
-            when {
-                outcome.succeeded -> {
-                    notifications.showComplete(downloadId, outcome.savedMedia)
-                    Result.success()
-                }
-                outcome.shouldRetry && runAttemptCount < MAX_RETRIES -> {
-                    notifications.cancel(downloadId)
-                    Result.retry()
-                }
-                else -> {
-                    if (outcome.shouldRetry) {
-                        repository.markFailed(
-                            downloadId,
-                            "Retry limit reached",
-                            ConversionFailure.DOWNLOAD_FAILED.code,
-                        )
-                    }
-                    notifications.showFailed(downloadId)
-                    Result.failure()
-                }
-            }
-        } catch (cancelled: CancellationException) {
-            if (downloadId > 0) {
-                notifications.cancel(downloadId)
-                withContext(NonCancellable + Dispatchers.IO) {
-                    repository.markRetryPending(
-                        downloadId,
-                        "Worker stopped; waiting to retry",
-                        ConversionFailure.DOWNLOAD_FAILED.code,
+        val disposition = try {
+            runDownloadAttempt(
+                canRetry = runAttemptCount < MAX_RETRIES,
+                attempt = {
+                    notifications.createChannel()
+                    val foreground = promoteToForeground(
+                        setForeground = { setForeground(notifications.foreground(downloadId, TITLE, 0, "")) },
+                        logFailure = { Log.w(TAG, "Download $downloadId continues without a foreground service", it) },
                     )
-                }
-            }
-            throw cancelled
-        } catch (failure: Exception) {
-            // A foreground-service rejection is handled by promoteToForeground above; any other
-            // failure outside runner.run would otherwise fail only WorkManager's row and leave
-            // our database row (and the UI) pending forever.
+                    runner.run(downloadId) { progress, eta ->
+                        if (shouldPostProgress(progress)) {
+                            if (foreground) {
+                                setForegroundAsync(notifications.foreground(downloadId, TITLE, progress, eta))
+                            } else {
+                                notifications.notifyProgress(downloadId, TITLE, progress, eta)
+                            }
+                        }
+                    }
+                },
+                markFailed = { error, code -> repository.markFailed(downloadId, error, code) },
+                presenter = notifications.outcomePresenter(downloadId),
+                log = { message, failure -> Log.w(TAG, message, failure) },
+            )
+        } catch (cancelled: CancellationException) {
+            notifications.cancel(downloadId)
             withContext(NonCancellable + Dispatchers.IO) {
-                repository.markFailed(
+                repository.markRetryPending(
                     downloadId,
-                    failure.message ?: "Unable to run download",
-                    ConversionFailureMapper.fromThrowable(failure).code,
+                    "Worker stopped; waiting to retry",
+                    ConversionFailure.DOWNLOAD_FAILED.code,
                 )
             }
-            try {
-                notifications.cancel(downloadId)
-            } catch (_: Exception) {
-                // Notification failure must not hide the persisted failure state.
-            }
-            Result.failure()
+            throw cancelled
+        }
+        return when (disposition) {
+            DownloadDisposition.COMPLETED -> Result.success()
+            DownloadDisposition.RETRY -> Result.retry()
+            DownloadDisposition.FAILED -> Result.failure()
         }
     }
 
