@@ -52,7 +52,7 @@ data class HomeUiState(
     val videoInfo: VideoInfo? get() = (linkState as? LinkUiState.Ready)?.info
     val error: String?
         get() = when (val state = linkState) {
-            is LinkUiState.Invalid -> "הקישור אינו קישור YouTube או Facebook נתמך"
+            is LinkUiState.Invalid -> "הקישור אינו קישור נתמך מיוטיוב, פייסבוק, אינסטגרם, טיקטוק או X"
             is LinkUiState.Error -> state.message
             else -> null
         }

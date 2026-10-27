@@ -75,6 +75,19 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun invalidLinkMessageNamesEverySupportedSite() = runTest(mainDispatcherRule.dispatcher) {
+        val viewModel = HomeViewModel(FakeMediaInfoProvider())
+
+        viewModel.onUrlChange("https://vimeo.com/123")
+        advanceUntilIdle()
+
+        val message = viewModel.uiState.value.error.orEmpty()
+        listOf("יוטיוב", "פייסבוק", "אינסטגרם", "טיקטוק", "X").forEach { site ->
+            assertTrue(site, message.contains(site))
+        }
+    }
+
+    @Test
     fun observesPersistedProgressFromScheduler() = runTest(mainDispatcherRule.dispatcher) {
         val command = FakeDownloadCommand()
         val viewModel = HomeViewModel(FakeMediaInfoProvider(), command)

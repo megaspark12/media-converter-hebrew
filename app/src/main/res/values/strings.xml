@@ -3,7 +3,7 @@
     <string name="app_name">ממיר מדיה</string>
 
     <!-- Home Screen -->
-    <string name="paste_url_hint">הדבק קישור מיוטיוב או פייסבוק</string>
+    <string name="paste_url_hint">הדבק קישור לסרטון</string>
     <string name="paste_button">הדבק</string>
     <string name="download_button">הורד</string>
     <string name="download_another_button">הורד עוד אחד</string>
