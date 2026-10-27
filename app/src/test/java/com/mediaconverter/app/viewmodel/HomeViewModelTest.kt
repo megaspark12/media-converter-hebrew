@@ -4,6 +4,7 @@ import com.mediaconverter.app.data.MediaInfoProvider
 import com.mediaconverter.app.data.NormalizedMediaUrl
 import com.mediaconverter.app.data.SupportedPlatform
 import com.mediaconverter.app.data.VideoInfo
+import com.mediaconverter.app.data.YtDlpException
 import com.mediaconverter.app.data.db.DownloadEntity
 import com.mediaconverter.app.test.MainDispatcherRule
 import kotlinx.coroutines.CancellationException
@@ -226,6 +227,22 @@ class HomeViewModelTest {
         viewModel.startDownload()
         runCurrent()
         assertEquals(8L, viewModel.uiState.value.activeDownloadId)
+    }
+
+    @Test
+    fun metadataFailureExplainsTheReasonInHebrew() = runTest(mainDispatcherRule.dispatcher) {
+        val provider = object : MediaInfoProvider {
+            override suspend fun getVideoInfo(url: NormalizedMediaUrl): Result<VideoInfo> =
+                Result.failure(YtDlpException("ERROR: [Instagram] Cabc: There is no video in this post"))
+        }
+        val viewModel = HomeViewModel(provider)
+
+        viewModel.onUrlChange("https://www.instagram.com/p/Cabc/")
+        advanceTimeBy(600)
+        advanceUntilIdle()
+
+        val error = viewModel.uiState.value.linkState as LinkUiState.Error
+        assertEquals("בקישור הזה אין סרטון", error.message)
     }
 
     @Test
