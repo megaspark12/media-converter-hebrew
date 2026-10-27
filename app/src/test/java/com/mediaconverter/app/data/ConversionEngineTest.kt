@@ -22,7 +22,6 @@ class ConversionEngineTest {
             FakeExtractor(),
             FakeTranscoder(),
             publisher,
-            FakeValidator(),
         )
 
         val result = engine.convert(request(OutputFormat.MP3), "hello")
@@ -45,7 +44,6 @@ class ConversionEngineTest {
             },
             FakeTranscoder(),
             FakePublisher(),
-            FakeValidator(),
         )
 
         val result = engine.convert(request(OutputFormat.MP4), "hello")
@@ -68,7 +66,6 @@ class ConversionEngineTest {
             MediaExtractor { _, _, _ -> throw fatal },
             FakeTranscoder(),
             FakePublisher(),
-            FakeValidator(),
         )
 
         val thrown = runCatching {
@@ -183,7 +180,7 @@ class ConversionEngineTest {
             mergedInputs += sources.map { it.readText() }
             output.apply { writeText("merged-video-and-audio") }
         })
-        val engine = ConversionEngine(cacheRoot, extractor, FakeTranscoder(), FakePublisher(), FakeValidator())
+        val engine = ConversionEngine(cacheRoot, extractor, FakeTranscoder(), FakePublisher())
 
         val saved = engine.convert(request(OutputFormat.MP4), "fixture").getOrThrow()
 
@@ -337,6 +334,80 @@ class ConversionEngineTest {
     }
 
     @Test
+    fun anInFlightSidecarBlocksTheMergeFallback() = runTest {
+        val directory = Files.createTempDirectory("merge-fallback-inflight-test").toFile()
+        val runtime = YtDlpRuntime(
+            client = object : YtDlpClient {
+                override suspend fun initialize() = Unit
+                override suspend fun execute(command: YtDlpCommand): YtDlpResult {
+                    // The video stream finished; the audio stream was aborted on a missing
+                    // fragment, so it is truncated and yt-dlp's resume record still sits next to
+                    // it. Two non-empty files are on disk, but one is not a finished stream and
+                    // merging them would publish a video whose sound stops halfway.
+                    File(directory, "source.f137.mp4").writeText("video")
+                    File(directory, "source.f140.m4a").writeText("truncated audio")
+                    File(directory, "source.f140.m4a.ytdl").writeText("{\"downloader\":{\"current_fragment\":{\"index\":3}}}")
+                    throw YtDlpException("ERROR: fragment 3 not found, unable to continue")
+                }
+                override suspend fun update() = false
+                override fun cancel(processId: String) = Unit
+                override fun version() = "test"
+            },
+            updateStore = object : YtDlpUpdateStore {
+                override suspend fun readState() = YtDlpUpdateState()
+                override suspend fun writeState(state: YtDlpUpdateState) = Unit
+            },
+        )
+        val extractor = YtDlpMediaExtractor(runtime, MediaSourceMerger { _, _ ->
+            throw AssertionError("A stream still being downloaded must not be merged")
+        })
+        try {
+            val thrown = runCatching {
+                extractor.downloadSource(request(OutputFormat.MP4), directory) { _, _ -> }
+            }.exceptionOrNull()
+            assertTrue("Expected a ConversionException, got $thrown", thrown is ConversionException)
+            assertTrue(
+                "The original yt-dlp failure must surface: ${thrown?.message}",
+                thrown?.message.orEmpty().contains("fragment 3 not found"),
+            )
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun transcoderSkipsTheRemuxWhenTheSourceCodecsDoNotBelongInMp4() = runTest {
+        val executed = mutableListOf<List<String>>()
+        val executor = object : FfmpegExecutor {
+            override suspend fun execute(arguments: List<String>): FfmpegExecution {
+                executed += arguments
+                File(arguments.last()).writeText("encoded")
+                return FfmpegExecution(succeeded = true, output = "")
+            }
+            override fun cancel() = Unit
+        }
+        val validator = object : MediaValidator {
+            override fun inspect(file: File) = MediaInspection(
+                file.length(), 6_000, hasAudio = true, hasVideo = true,
+                codecs = SourceCodecs("video/x-vnd.on2.vp9", "audio/opus"),
+            )
+            override fun isValid(file: File, format: OutputFormat) = file.isFile && file.length() > 0
+        }
+        val directory = Files.createTempDirectory("transcoder-codecs-test").toFile()
+        val source = File(directory, "merged-source.mkv").apply { writeText("vp9+opus") }
+        try {
+            FfmpegMediaTranscoder(executor, validator)
+                .transcode(source, File(directory, "result.mp4"), OutputFormat.MP4)
+
+            val command = executed.single()
+            assertEquals("h264_mediacodec", command[command.indexOf("-c:v") + 1])
+            assertFalse(command.contains("copy"))
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test
     fun cancellingNativeMergeStopsItsExecutorAndCleansWithoutPublishing() = runTest {
         val cacheRoot = Files.createTempDirectory("cancel-merge-test").toFile()
         val started = CompletableDeferred<Unit>()
@@ -355,7 +426,7 @@ class ConversionEngineTest {
                 File(directory, name).apply { writeText(name) }
             }
             merger.merge(sources, File(directory, "merged.mkv"))
-        }, FakeTranscoder(), publisher, FakeValidator())
+        }, FakeTranscoder(), publisher)
         val job = async { engine.convert(request(OutputFormat.MP4), "fixture") }
         started.await()
         job.cancel()

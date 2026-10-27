@@ -101,7 +101,7 @@ class YtDlpDownloadInstrumentedTest {
                             published = true
                             return SavedMedia("content://fixture/output", displayName, format.mimeType, source.length(), 6_000)
                         }
-                    }, validator)
+                    })
                 val result = engine.convert(ConversionRequest(123,
                     NormalizedMediaUrl("https://youtu.be/fixture", SupportedPlatform.YOUTUBE), OutputFormat.MP4), "fixture")
 

@@ -23,6 +23,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.OutputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -47,12 +48,43 @@ interface MediaPublisher {
     suspend fun publish(source: File, displayName: String, format: OutputFormat): SavedMedia
 }
 
+data class SourceCodecs(val videoMime: String?, val audioMime: String?)
+
 data class MediaInspection(
     val sizeBytes: Long,
     val durationMillis: Long,
     val hasAudio: Boolean,
     val hasVideo: Boolean,
+    val codecs: SourceCodecs = SourceCodecs(null, null),
 )
+
+/**
+ * Whether an inspected output is the promised [format]. Shared by the transcoder's per-attempt
+ * check and the publisher's final gate, so each inspects its file once.
+ */
+internal fun MediaInspection.isAcceptable(fileName: String, format: OutputFormat): Boolean {
+    if (!fileName.endsWith(".${format.extension}", ignoreCase = true)) return false
+    if (sizeBytes <= 0L || durationMillis <= 0L) return false
+    return when (format) {
+        OutputFormat.MP3 -> hasAudio && !hasVideo
+        OutputFormat.MP4 -> hasAudio && hasVideo
+    }
+}
+
+/** Copies [source] into [output], stopping at the next chunk once the coroutine is cancelled. */
+internal suspend fun copyCancellable(source: File, output: OutputStream) {
+    val context = currentCoroutineContext()
+    source.inputStream().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            context.ensureActive()
+            val count = input.read(buffer)
+            if (count < 0) break
+            output.write(buffer, 0, count)
+        }
+    }
+    context.ensureActive()
+}
 
 interface MediaValidator {
     fun inspect(file: File): MediaInspection
@@ -66,16 +98,21 @@ object YtDlpDownloadCommandFactory {
             OutputFormat.MP4 -> {
                 val height = request.quality.toIntOrNull()?.takeIf { it > 0 }
                 val limit = height?.let { "[height<=$it]" }.orEmpty()
-                "bestvideo$limit+bestaudio/best$limit"
+                // H.264 video with AAC audio is what an MP4 player can rely on, so it is asked
+                // for first and the transcoder can copy it as-is. Anything else (VP9, AV1, Opus
+                // at higher resolutions) is still accepted and re-encoded.
+                "bestvideo[vcodec^=avc1]$limit+bestaudio[acodec^=mp4a]/bestvideo$limit+bestaudio/best$limit"
             }
         }
+        // No --no-part: yt-dlp then writes each stream to a `.part` file and gives it its final
+        // name only once the stream is complete. downloadSource relies on that final name as
+        // its completeness marker; with --no-part an interrupted stream looked finished.
         val common = listOf(
             "--no-playlist",
             "--socket-timeout", "20",
             "--retries", "3",
             "--fragment-retries", "3",
             "--abort-on-unavailable-fragments",
-            "--no-part",
             "--force-overwrites",
             "-f", formatSelector,
             "-o", outputTemplate,
@@ -127,26 +164,25 @@ class YtDlpMediaExtractor(
         } catch (failure: Exception) {
             failure
         }
-        val outputs = tempDirectory.listFiles()
+        // yt-dlp writes a stream to `<name>.part` (fragments to `.part-FragN`) and keeps a `.ytdl`
+        // resume record beside it; only when the stream is complete does the file get its final
+        // name and the record go away. So a finished stream is a non-empty file under its final
+        // name, and any sidecar left behind means a stream never finished.
+        val (sidecars, outputs) = tempDirectory.listFiles()
             .orEmpty()
-            .filter {
-                // Only the finished media streams count. yt-dlp also leaves its own sidecar files
-                // next to them -- the `.ytdl` resume record and `.part` / `.part-Frag` fragments --
-                // and an aborted download (e.g. a missing HLS fragment) leaves the sidecar behind,
-                // so counting them would make a single partial file look like two streams to merge.
-                it.isFile && it.name.startsWith("source.") &&
-                    !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.contains(".part-")
-            }
+            .filter { it.isFile && it.name.startsWith("source.") }
+            .partition { it.isYtDlpSidecar() }
         // yt-dlp downloads the separate video and audio streams first and only then runs its own
         // in-process merge. That merge step is unreliable on some devices (its bundled ffmpeg is
         // half-detected) and can throw even though both complete streams are already on disk. When
-        // exactly those two MP4 streams are present, FFmpegKit merges them below -- the same path a
-        // clean "ffmpeg not found, keep the files" run already takes -- instead of failing. Any
-        // other failure (no source, a single partial file) is surfaced to the caller as before.
-        val hasSeparateMp4Streams = outputs.size == 2 &&
+        // exactly those two finished streams are present, FFmpegKit merges them below -- the same
+        // path a clean "ffmpeg not found, keep the files" run already takes -- instead of failing.
+        // Any other failure (no source, a single file, a stream still in flight) is surfaced.
+        val hasCompleteSeparateStreams = sidecars.isEmpty() &&
+            outputs.size == 2 &&
             request.outputFormat == OutputFormat.MP4 &&
             outputs.none { it.length() <= 0L }
-        if (downloadFailure != null && !hasSeparateMp4Streams) {
+        if (downloadFailure != null && !hasCompleteSeparateStreams) {
             throw ConversionException(
                 ConversionFailureMapper.fromThrowable(downloadFailure),
                 downloadFailure.message ?: "yt-dlp download failed",
@@ -168,6 +204,9 @@ class YtDlpMediaExtractor(
         }
     }
 }
+
+private fun File.isYtDlpSidecar(): Boolean =
+    name.endsWith(".part") || name.endsWith(".ytdl") || name.contains(".part-")
 
 /**
  * youtubedl-android passes `--ffmpeg-location <nativeLibraryDir>/libffmpeg.so` on every run, but
@@ -316,7 +355,7 @@ class FfmpegMediaTranscoder(
     override suspend fun transcode(source: File, output: File, format: OutputFormat): File {
         val commands = when (format) {
             OutputFormat.MP3 -> listOf(TranscodeCommandFactory.mp3(source, output))
-            OutputFormat.MP4 -> TranscodeCommandFactory.mp4Fallbacks(source, output)
+            OutputFormat.MP4 -> TranscodeCommandFactory.mp4Fallbacks(source, output, sourceCodecs(source))
         }
         var lastOutput = ""
         for (command in commands) {
@@ -333,6 +372,13 @@ class FfmpegMediaTranscoder(
         )
     }
 
+    /** A source whose codecs cannot be read skips the remux and goes straight to the encoders. */
+    private fun sourceCodecs(source: File): SourceCodecs? = try {
+        validator.inspect(source).codecs
+    } catch (_: Exception) {
+        null
+    }
+
     override fun cancel() = executor.cancel()
 }
 
@@ -344,14 +390,14 @@ open class AndroidMediaValidator : MediaValidator {
         val extractor = AndroidMediaExtractor()
         return try {
             extractor.setDataSource(file.absolutePath)
-            var hasAudio = false
-            var hasVideo = false
+            var videoMime: String? = null
+            var audioMime: String? = null
             var durationMicros = 0L
             repeat(extractor.trackCount) { index ->
                 val track = extractor.getTrackFormat(index)
                 val mime = track.getString(android.media.MediaFormat.KEY_MIME).orEmpty()
-                hasAudio = hasAudio || mime.startsWith("audio/")
-                hasVideo = hasVideo || mime.startsWith("video/")
+                if (mime.startsWith("audio/") && audioMime == null) audioMime = mime
+                if (mime.startsWith("video/") && videoMime == null) videoMime = mime
                 if (track.containsKey(android.media.MediaFormat.KEY_DURATION)) {
                     durationMicros = maxOf(
                         durationMicros,
@@ -359,24 +405,25 @@ open class AndroidMediaValidator : MediaValidator {
                     )
                 }
             }
-            MediaInspection(file.length(), durationMicros / 1_000L, hasAudio, hasVideo)
+            MediaInspection(
+                sizeBytes = file.length(),
+                durationMillis = durationMicros / 1_000L,
+                hasAudio = audioMime != null,
+                hasVideo = videoMime != null,
+                codecs = SourceCodecs(videoMime, audioMime),
+            )
         } finally {
             extractor.release()
         }
     }
 
     override fun isValid(file: File, format: OutputFormat): Boolean {
-        if (!file.name.endsWith(".${format.extension}", ignoreCase = true)) return false
         val inspection = try {
             inspect(file)
         } catch (_: Exception) {
             return false
         }
-        if (inspection.sizeBytes <= 0L || inspection.durationMillis <= 0L) return false
-        return when (format) {
-            OutputFormat.MP3 -> inspection.hasAudio && !inspection.hasVideo
-            OutputFormat.MP4 -> inspection.hasAudio && inspection.hasVideo
-        }
+        return inspection.isAcceptable(file.name, format)
     }
 }
 
@@ -393,10 +440,14 @@ class MediaStorePublisher(
         var committedFile: File? = null
         return try {
             withContext(Dispatchers.IO) {
-                if (!validator.isValid(source, format)) {
+                val inspection = try {
+                    validator.inspect(source)
+                } catch (failure: Exception) {
+                    throw ConversionException(ConversionFailure.PROCESSING_FAILED, "Output validation failed", failure)
+                }
+                if (!inspection.isAcceptable(source.name, format)) {
                     throw ConversionException(ConversionFailure.PROCESSING_FAILED, "Output validation failed")
                 }
-                val inspection = validator.inspect(source)
                 val safeName = sanitizeMediaDisplayName(displayName, format)
                 val resolver = context.contentResolver
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -409,19 +460,8 @@ class MediaStorePublisher(
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw ConversionException(ConversionFailure.STORAGE_FULL, "Unable to create MediaStore row")
             try {
-                val copyContext = currentCoroutineContext()
-                resolver.openOutputStream(uri, "w")?.use { output ->
-                    source.inputStream().use { input ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        while (true) {
-                            copyContext.ensureActive()
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                        }
-                    }
-                } ?: throw ConversionException(ConversionFailure.STORAGE_FULL, "Unable to open MediaStore output")
-                copyContext.ensureActive()
+                resolver.openOutputStream(uri, "w")?.use { output -> copyCancellable(source, output) }
+                    ?: throw ConversionException(ConversionFailure.STORAGE_FULL, "Unable to open MediaStore output")
                 val finalized = resolver.update(uri, ContentValues().apply {
                     put(MediaStore.MediaColumns.IS_PENDING, 0)
                 }, null, null)
@@ -464,19 +504,7 @@ class MediaStorePublisher(
             val pending = File(directory, ".${UUID.randomUUID()}.pending")
             var uri: android.net.Uri? = null
             try {
-                val copyContext = currentCoroutineContext()
-                pending.outputStream().use { output ->
-                    source.inputStream().use { input ->
-                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                        while (true) {
-                            copyContext.ensureActive()
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            output.write(buffer, 0, count)
-                        }
-                    }
-                }
-                copyContext.ensureActive()
+                pending.outputStream().use { output -> copyCancellable(source, output) }
                 if (!pending.renameTo(destination)) {
                     throw ConversionException(
                         ConversionFailure.STORAGE_FULL,
@@ -587,7 +615,6 @@ class ConversionEngine(
     private val extractor: MediaExtractor,
     private val transcoder: MediaTranscoder,
     private val publisher: MediaPublisher,
-    private val validator: MediaValidator,
 ) {
     suspend fun convert(
         request: ConversionRequest,
@@ -603,9 +630,6 @@ class ConversionEngine(
             val source = extractor.downloadSource(request, requestDirectory, onProgress)
             val output = File(requestDirectory, "result.${request.outputFormat.extension}")
             val converted = transcoder.transcode(source, output, request.outputFormat)
-            if (!validator.isValid(converted, request.outputFormat)) {
-                throw ConversionException(ConversionFailure.PROCESSING_FAILED, "Converted file is invalid")
-            }
             Result.success(publisher.publish(converted, displayName, request.outputFormat))
         } catch (cancelled: CancellationException) {
             transcoder.cancel()
@@ -632,7 +656,6 @@ class ConversionEngine(
                 extractor = YtDlpMediaExtractor(YtDlpRuntimeProvider.get(context)),
                 transcoder = FfmpegMediaTranscoder(FfmpegKitExecutor(), validator),
                 publisher = MediaStorePublisher(context, validator),
-                validator = validator,
             )
         }
     }
