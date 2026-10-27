@@ -10,3 +10,4 @@
 app/build/
 *.log
 *.webm
+/.superpowers/
